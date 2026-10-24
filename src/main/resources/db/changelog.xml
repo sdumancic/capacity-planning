@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<databaseChangeLog xmlns="http://www.liquibase.org/xml/ns/dbchangelog" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog https://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+<changeSet id="001-schema" author="capacity"><sqlFile path="001-schema.sql" relativeToChangelogFile="true"/></changeSet>
+<changeSet id="002-capacity" author="capacity"><sqlFile path="002-capacity.sql" relativeToChangelogFile="true" splitStatements="true" endDelimiter="GO"/></changeSet>
+<changeSet id="005-v3-cutover" author="capacity"><sqlFile path="005-v3-cutover.sql" relativeToChangelogFile="true" splitStatements="false"/></changeSet>
+<changeSet id="003-demo" author="capacity" contextFilter="@demo"><sqlFile path="003-demo.sql" relativeToChangelogFile="true"/></changeSet>
+<changeSet id="004-consistency" author="capacity"><sqlFile path="004-consistency.sql" relativeToChangelogFile="true" splitStatements="false"/></changeSet>
+<changeSet id="006-user-capacity-corrections" author="capacity"><sqlFile path="006-user-capacity-corrections.sql" relativeToChangelogFile="true" splitStatements="false"/></changeSet>
+</databaseChangeLog>

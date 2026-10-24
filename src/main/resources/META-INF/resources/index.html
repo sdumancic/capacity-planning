@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Capacity · Workshop planning</title>
+    <link rel="stylesheet" href="planner.css" />
+    <script type="module" src="planner.mjs"></script>
+  </head>
+  <body>
+    <a class="skip" href="#planner">Skip to planner</a>
+    <header>
+      <a href="/" class="brand"
+        ><span class="brand-icon">▤</span> CAPACITY
+        <span class="brand-sub">/ WORKSHOP</span></a
+      ><span class="local">LOCAL WORKSPACE</span>
+    </header>
+    <main>
+      <section class="heading">
+        <div>
+          <p class="eyebrow">WORK ORDER PLANNING</p>
+          <h1>A clear view of the day.</h1>
+          <p class="muted">Plan the workload. Make room for the work.</p>
+        </div>
+        <button id="new-plan" class="primary" disabled>＋ Plan time</button>
+      </section>
+      <section class="toolbar" aria-label="Planner filters">
+        <div class="date-controls">
+          <button id="previous" aria-label="Previous day">←</button
+          ><label class="sr-only" for="day">Business day</label
+          ><input type="date" id="day" /><button
+            id="next"
+            aria-label="Next day"
+          >
+            →</button
+          ><button id="today">Today</button>
+        </div>
+        <label
+          >Workshop
+          <select id="dealer">
+            <option value="1">Demo workshop</option>
+          </select></label
+        ><span id="zone" class="muted"></span
+        ><button id="refresh">↻ Refresh</button>
+      </section>
+      <div id="notice" role="status" aria-live="polite" hidden></div>
+      <section
+        id="summary"
+        class="summary"
+        aria-label="Daily capacity"
+      ></section>
+      <section id="planner" class="panel">
+        <div class="panel-title">
+          <div>
+            <h2>Daily planner</h2>
+            <p class="muted">
+              Team → employee → work order. Each work order has its own
+              timeline. Drag team work onto an employee, a time cell or another
+              team.
+            </p>
+          </div>
+          <div class="draft-actions">
+            <span id="draft-count" class="muted"></span
+            ><button id="discard" hidden>Discard drafts</button
+            ><button id="save" class="primary" hidden>Save schedules</button>
+          </div>
+        </div>
+        <div class="legend">
+          <span><i class="swatch planned"></i>Scheduled work</span
+          ><span><i class="swatch blocked"></i>Unavailable</span
+          ><span><i class="swatch calendar-absence"></i>Absence</span
+          ><span><i class="swatch calendar-break"></i>Break</span
+          ><span><i class="swatch calendar-event"></i>Event</span
+          ><span><i class="swatch calendar-absence calendar-pending"></i>Pending absence (dashed)</span
+          ><span class="muted">15-minute grid · local business time</span>
+        </div>
+        <div id="teams"><p class="loading">Loading workshop…</p></div>
+      </section>
+      <footer>
+        <span
+          >Capacity is calculated from attendance and productivity. Planned time
+          counts toward booked capacity.</span
+        ><span>Hub calendar: simulated integration</span>
+      </footer>
+    </main>
+    <dialog id="modal" aria-labelledby="modal-title">
+      <form id="modal-form">
+        <div class="dialog-heading">
+          <h2 id="modal-title"></h2>
+          <button type="button" id="close-modal" aria-label="Close dialog">
+            ×
+          </button>
+        </div>
+        <div id="modal-body"></div>
+        <p id="modal-error" class="error" role="alert"></p>
+        <div class="dialog-actions">
+          <button type="button" id="cancel-modal">Cancel</button
+          ><button type="submit" class="primary" id="modal-submit">Save</button>
+        </div>
+      </form>
+    </dialog>
+  </body>
+</html>
