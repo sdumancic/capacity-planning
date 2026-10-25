@@ -4,6 +4,7 @@ import org.acme.planning.application.PlanningRepository;
 import org.acme.planning.application.PlanningViews;
 import org.acme.planning.domain.Models.*;
 import org.acme.planning.domain.Problem;
+import org.acme.planning.infrastructure.persistence.TimePlanStore;
 import jakarta.enterprise.context.ApplicationScoped;
 import javax.sql.DataSource;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -11,16 +12,22 @@ import java.sql.*;
 import java.time.*;
 import java.util.*;
 
+/**
+ * Read models, audit log and outbox writes on JDBC; the time plan aggregate itself is delegated to
+ * TimePlanStore (Hibernate ORM). Both share the transaction's connection.
+ */
 @ApplicationScoped
 public class JdbcPlanningRepository implements PlanningRepository {
     private final DataSource ds;
     private final ObjectMapper json;
     private final CurrentUser currentUser;
+    private final TimePlanStore plans;
 
-    public JdbcPlanningRepository(DataSource ds, ObjectMapper json, CurrentUser user) {
+    public JdbcPlanningRepository(DataSource ds, ObjectMapper json, CurrentUser user, TimePlanStore plans) {
         this.ds = ds;
         this.json = json;
         this.currentUser = user;
+        this.plans = plans;
     }
 
     interface Read<T> {
@@ -71,21 +78,6 @@ public class JdbcPlanningRepository implements PlanningRepository {
         }
     }
 
-    private long insert(String sql, Object... args) {
-        try (var c = ds.getConnection(); var s = c.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
-            bind(s, args);
-            s.executeUpdate();
-            try (var r = s.getGeneratedKeys()) {
-                if (!r.next()) {
-                    throw new SQLException("No generated id");
-                }
-                return r.getLong(1);
-            }
-        } catch (SQLException e) {
-            throw failure(e);
-        }
-    }
-
     private static Integer nullable(ResultSet r, String n) throws SQLException {
         int v = r.getInt(n);
         return r.wasNull() ? null : v;
@@ -95,45 +87,24 @@ public class JdbcPlanningRepository implements PlanningRepository {
         return r.getTimestamp(n, Calendar.getInstance(TimeZone.getTimeZone("UTC"))).toInstant();
     }
 
-    private Plan plan(ResultSet r) throws SQLException {
-        long id = r.getLong("id");
-        return new Plan(id, r.getInt("work_order_id"), r.getInt("team_id"), nullable(r, "member_id"),
-                r.getDate("day").toLocalDate(), r.getInt("planned_minutes"), r.getInt("version"), slots(id));
-    }
-
-    private List<Slot> slots(long id) {
-        return query(
-                "SELECT s.id,s.start_at,s.end_at,COALESCE(h.status,'PENDING') AS hub_status FROM dbo.work_order_time_slot s LEFT JOIN dbo.slot_hub_sync h ON h.slot_id=s.id WHERE s.time_plan_id=? ORDER BY s.start_at,s.id",
-                r -> new Slot(r.getLong("id"), instant(r, "start_at"), instant(r, "end_at"), r.getString("hub_status")),
-                id);
-    }
-
     public Plan find(long id) {
-        var a = query("SELECT * FROM dbo.work_order_time_plan WHERE id=?", this::plan, id);
-        if (a.isEmpty()) {
+        var plan = plans.find(id);
+        if (plan == null) {
             throw new Problem(404, "TIME_PLAN_NOT_FOUND", "Time plan not found");
         }
-        return a.getFirst();
+        return plan;
     }
 
     public List<Plan> list(LocalDate day, Integer order) {
-        return query(
-                "SELECT * FROM dbo.work_order_time_plan WHERE (? IS NULL OR [day]=?) AND (? IS NULL OR work_order_id=?) ORDER BY id",
-                this::plan, day, day, order, order);
+        return plans.list(day, order);
     }
 
     public List<Plan> personPlans(int user, LocalDate day) {
-        return query("""
-                SELECT p.* FROM dbo.work_order_time_plan p JOIN dbo.pp_team_member m ON m.id=p.member_id
-                WHERE m.pp_member_id=? AND p.[day]=? ORDER BY p.id
-                """, this::plan, user, day);
+        return plans.personPlans(user, day);
     }
 
     public Plan target(int order, int team, Integer member, LocalDate day) {
-        var a = query(
-                "SELECT * FROM dbo.work_order_time_plan WHERE work_order_id=? AND team_id=? AND ((member_id IS NULL AND ? IS NULL) OR member_id=?) AND [day]=?",
-                this::plan, order, team, member, member, day);
-        return a.isEmpty() ? null : a.getFirst();
+        return plans.target(order, team, member, day);
     }
 
     public Order order(int id) {
@@ -288,40 +259,11 @@ public class JdbcPlanningRepository implements PlanningRepository {
     }
 
     public Plan save(Plan p) {
-        long id = p.id();
-        if (id == 0) {
-            Integer by = CurrentUser.current(currentUser);
-            id = insert(
-                    "INSERT dbo.work_order_time_plan(work_order_id,team_id,member_id,[day],planned_minutes,created_by,modified_by) VALUES(?,?,?,?,?,?,?)",
-                    p.workOrderId(), p.teamId(), p.memberId(), p.day(), p.plannedMinutes(), by, by);
-        } else if (update(
-                "UPDATE dbo.work_order_time_plan SET team_id=?,member_id=?,planned_minutes=?,version=version+1,modified_at=SYSUTCDATETIME(),modified_by=? WHERE id=? AND version=?",
-                p.teamId(), p.memberId(), p.plannedMinutes(), CurrentUser.current(currentUser), id, p.version()) != 1) {
-            throw new Problem(409, "VERSION_CONFLICT", "Time plan changed; reload");
-        }
-        var wanted = new HashSet<Long>();
-        for (var s : p.slots()) {
-            if (s.id() != null) {
-                update("UPDATE dbo.work_order_time_slot SET time_plan_id=?,start_at=?,end_at=? WHERE id=?", id,
-                        s.start(), s.end(), s.id());
-                wanted.add(s.id());
-            } else
-                wanted.add(insert("INSERT dbo.work_order_time_slot(time_plan_id,start_at,end_at) VALUES(?,?,?)", id,
-                        s.start(), s.end()));
-        }
-        for (var old : slots(id)) {
-            if (!wanted.contains(old.id())) {
-                update("DELETE dbo.work_order_time_slot WHERE id=?", old.id());
-            }
-        }
-        return find(id);
+        return plans.save(p, CurrentUser.current(currentUser));
     }
 
     public void delete(Plan p) {
-        update("DELETE dbo.work_order_time_slot WHERE time_plan_id=?", p.id());
-        if (update("DELETE dbo.work_order_time_plan WHERE id=? AND version=?", p.id(), p.version()) != 1) {
-            throw new Problem(409, "VERSION_CONFLICT", "Time plan changed; reload");
-        }
+        plans.delete(p);
     }
 
     public void enqueue(long slot, int user, LocalDate day) {
