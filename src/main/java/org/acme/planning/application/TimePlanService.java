@@ -14,6 +14,7 @@ public class TimePlanService {
     private final CommonPlanningService common;
     private final TimeSlotService slotService;
     private final TimePlanLogService logs;
+
     public TimePlanService(PlanningRepository repo, PlanningLockRepository locks, CommonPlanningService common,
             TimeSlotService slots, TimePlanLogService logs) {
         this.repo = repo;
@@ -33,14 +34,17 @@ public class TimePlanService {
         var a = common.valid(c.workOrderId(), c.teamId(), c.memberId());
         locks.lockAssignees(List.of(new Plan(0, c.workOrderId(), a.teamId(), a.memberId(), c.day(), n, 0, List.of())));
         var p = repo.target(c.workOrderId(), a.teamId(), a.memberId(), c.day());
-        if (p != null) { locks.lockPlans(List.of(p.id())); p = repo.find(p.id()); }
-        // The API adds to the existing plan without a version; a client that sends one still gets 409 when stale.
+        if (p != null) {
+            locks.lockPlans(List.of(p.id()));
+            p = repo.find(p.id());
+        }
+        // The API adds to the existing plan without a version; a client that sends one
+        // still gets 409 when stale.
         if (p != null && c.expectedVersion() != null) {
             common.version(p, c.expectedVersion());
         }
-        var next = p == null ? 
-                            new Plan(0, c.workOrderId(), a.teamId(), a.memberId(), c.day(), n, 0, List.of())
-                            : p.change(p.teamId(), p.memberId(), Math.addExact(p.plannedMinutes(), n), p.slots());
+        var next = p == null ? new Plan(0, c.workOrderId(), a.teamId(), a.memberId(), c.day(), n, 0, List.of())
+                : p.change(p.teamId(), p.memberId(), Math.addExact(p.plannedMinutes(), n), p.slots());
         common.limit(next);
         common.capacity(null, a, c.day(), n, Boolean.TRUE.equals(c.allowOverbooking()));
         next = repo.save(next);
@@ -61,11 +65,12 @@ public class TimePlanService {
         common.version(p, c.expectedVersion());
         var next = p.change(p.teamId(), p.memberId(), n, p.slots());
         common.limit(next);
-        if (n>p.plannedMinutes()) {
-            common.capacity(null, common.valid(p.workOrderId(), p.teamId(), p.memberId()), p.day(), n-p.plannedMinutes(), Boolean.TRUE.equals(c.allowOverbooking()));
+        if (n > p.plannedMinutes()) {
+            common.capacity(null, common.valid(p.workOrderId(), p.teamId(), p.memberId()), p.day(),
+                    n - p.plannedMinutes(), Boolean.TRUE.equals(c.allowOverbooking()));
         }
         next = repo.save(next);
-        logs.log("CHANGE_DURATION", p, next, null, UUID.randomUUID(), n-p.plannedMinutes());
+        logs.log("CHANGE_DURATION", p, next, null, UUID.randomUUID(), n - p.plannedMinutes());
         return common.result(List.of(next), List.of());
     }
 
@@ -83,31 +88,34 @@ public class TimePlanService {
         return common.result(List.of(), sync);
     }
 
-    private Map<String,Object> view(Plan p) {
+    private Map<String, Object> view(Plan p) {
         var view = new LinkedHashMap<>(PlanningViews.plan(p));
-        var warnings = new ArrayList<Map<String,Object>>();
-        var issues = slotService.conflicts(p,Set.of(p.id()),List.of(p),warnings);
-        var slots = new ArrayList<Map<String,Object>>();
-        for (var slot:p.slots()) {
-            var item = new LinkedHashMap<String,Object>();
-            item.put("id",slot.id());
-            item.put("start",slot.start());
-            item.put("end",slot.end());
-            item.put("duration",Duration.ofMinutes(slot.minutes()).toString());
-            item.put("hubStatus",slot.hubStatus() == null?"PENDING":slot.hubStatus());
-            item.put("conflicts",issues.stream().filter(c -> Objects.equals(c.get("slotId"),slot.id())).toList());
-            item.put("warnings",warnings.stream().filter(c -> Objects.equals(c.get("slotId"),slot.id())).toList());
+        var warnings = new ArrayList<Map<String, Object>>();
+        var issues = slotService.conflicts(p, Set.of(p.id()), List.of(p), warnings);
+        var slots = new ArrayList<Map<String, Object>>();
+        for (var slot : p.slots()) {
+            var item = new LinkedHashMap<String, Object>();
+            item.put("id", slot.id());
+            item.put("start", slot.start());
+            item.put("end", slot.end());
+            item.put("duration", Duration.ofMinutes(slot.minutes()).toString());
+            item.put("hubStatus", slot.hubStatus() == null ? "PENDING" : slot.hubStatus());
+            item.put("conflicts", issues.stream().filter(c -> Objects.equals(c.get("slotId"), slot.id())).toList());
+            item.put("warnings", warnings.stream().filter(c -> Objects.equals(c.get("slotId"), slot.id())).toList());
             slots.add(item);
         }
-        view.put("slots",slots);
+        view.put("slots", slots);
         return view;
     }
 
     public Map<String, Object> planner(LocalDate day, Integer dealer) {
         common.day(day);
         var result = new LinkedHashMap<>(repo.planner(day, dealer, common.zone().toString()));
-        var dealers = new HashMap<Integer,Integer>();
-        result.put("timePlans",repo.list(day,null).stream().filter(p -> dealer == null || dealers.computeIfAbsent(p.workOrderId(), o -> repo.order(o).dealerId()).equals(dealer)).map(this::view).toList());
+        var dealers = new HashMap<Integer, Integer>();
+        result.put("timePlans", repo.list(day, null).stream()
+                .filter(p -> dealer == null
+                        || dealers.computeIfAbsent(p.workOrderId(), o -> repo.order(o).dealerId()).equals(dealer))
+                .map(this::view).toList());
         return result;
     }
 

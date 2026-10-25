@@ -59,11 +59,6 @@
               team.
             </p>
           </div>
-          <div class="draft-actions">
-            <span id="draft-count" class="muted"></span
-            ><button id="discard" hidden>Discard drafts</button
-            ><button id="save" class="primary" hidden>Save schedules</button>
-          </div>
         </div>
         <div class="legend">
           <span><i class="swatch planned"></i>Scheduled work</span
@@ -83,6 +78,11 @@
         ><span>Hub calendar: simulated integration</span>
       </footer>
     </main>
+    <div id="draft-bar" class="draft-actions" role="region" aria-label="Schedule drafts" hidden>
+      <span id="draft-count"></span>
+      <button id="discard">Discard drafts</button>
+      <button id="save" class="primary">Save schedules</button>
+    </div>
     <dialog id="modal" aria-labelledby="modal-title">
       <form id="modal-form">
         <div class="dialog-heading">

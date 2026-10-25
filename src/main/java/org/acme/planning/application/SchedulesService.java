@@ -13,6 +13,7 @@ public class SchedulesService {
     private final CommonPlanningService common;
     private final TimeSlotService slots;
     private final TimePlanLogService logs;
+
     public SchedulesService(PlanningRepository repo, PlanningLockRepository locks, CommonPlanningService common,
             TimeSlotService slots, TimePlanLogService logs) {
         this.repo = repo;
@@ -24,14 +25,16 @@ public class SchedulesService {
 
     @Transactional
     public Map<String, Object> schedule(List<Schedule> schedules) {
-        if (schedules != null && schedules.size()>50) { throw new Problem(400, "TOO_MANY_TIME_PLANS", "At most 50 schedules"); }
+        if (schedules != null && schedules.size() > 50) {
+            throw new Problem(400, "TOO_MANY_TIME_PLANS", "At most 50 schedules");
+        }
         if (schedules == null || schedules.isEmpty()) {
             throw Problem.bad("1–50 schedules required");
         }
         var before = new ArrayList<Plan>();
         var after = new ArrayList<Plan>();
         var excluded = new HashSet<Long>();
-        for (var s:schedules) {
+        for (var s : schedules) {
             if (s == null || s.timePlanId() == null || !excluded.add(s.timePlanId())) {
                 throw Problem.bad("Unique timePlanId required");
             }
@@ -39,7 +42,9 @@ public class SchedulesService {
             if (s.slots() != null && !s.slots().isEmpty()) {
                 common.valid(p.workOrderId(), p.teamId(), p.memberId());
             }
-            if (p.memberId() == null) { throw new Problem(400, "TEAM_TIME_PLAN", "Team plans cannot be scheduled"); }
+            if (p.memberId() == null) {
+                throw new Problem(400, "TEAM_TIME_PLAN", "Team plans cannot be scheduled");
+            }
             before.add(p);
             after.add(p.change(p.teamId(), p.memberId(), p.plannedMinutes(), slots.requested(p, s.slots())));
         }
@@ -50,27 +55,36 @@ public class SchedulesService {
         var stale = new ArrayList<Long>();
         for (var item : schedules) {
             var p = repo.find(item.timePlanId());
-            if (item.expectedVersion() == null) { throw Problem.bad("expectedVersion required"); }
-            if (p.version() != item.expectedVersion()) { stale.add(p.id()); }
+            if (item.expectedVersion() == null) {
+                throw Problem.bad("expectedVersion required");
+            }
+            if (p.version() != item.expectedVersion()) {
+                stale.add(p.id());
+            }
             before.add(p);
             after.add(p.change(p.teamId(), p.memberId(), p.plannedMinutes(), slots.requested(p, item.slots())));
         }
-        if (!stale.isEmpty()) { throw new Problem(409, "VERSION_CONFLICT", "Time plans changed; reload", Map.of("staleIds", stale)); }
+        if (!stale.isEmpty()) {
+            throw new Problem(409, "VERSION_CONFLICT", "Time plans changed; reload", Map.of("staleIds", stale));
+        }
         slots.validateRequestOverlaps(after);
-        var warnings = new ArrayList<Map<String, Object>>();   // the response recomputes them from the saved state
+        var warnings = new ArrayList<Map<String, Object>>(); // the response recomputes them from the saved state
         var conflicts = new ArrayList<Map<String, Object>>();
-        for (var p:after) {
+        for (var p : after) {
             common.limit(p);
             conflicts.addAll(slots.conflicts(p, excluded, after, warnings));
         }
-        if (conflicts.stream().anyMatch(c -> "OUTSIDE_VEHICLE_WINDOW".equals(c.get("reason")))) { throw new Problem(409, "OUTSIDE_VEHICLE_WINDOW", "Slot outside vehicle window", Map.of("conflicts", conflicts)); }
+        if (conflicts.stream().anyMatch(c -> "OUTSIDE_VEHICLE_WINDOW".equals(c.get("reason")))) {
+            throw new Problem(409, "OUTSIDE_VEHICLE_WINDOW", "Slot outside vehicle window",
+                    Map.of("conflicts", conflicts));
+        }
         if (!conflicts.isEmpty()) {
             throw new Problem(409, "SLOT_NOT_FREE", "Slots conflict with availability", Map.of("conflicts", conflicts));
         }
         var sync = new ArrayList<Map<String, Object>>();
         var saved = new ArrayList<Plan>();
         var correlation = UUID.randomUUID();
-        for (int i = 0; i<after.size(); i++) {
+        for (int i = 0; i < after.size(); i++) {
             var p = repo.save(after.get(i));
             saved.add(p);
             common.sync(before.get(i), p, sync);

@@ -33,6 +33,21 @@ function message(text, error = false) {
   $("notice").textContent = text;
   $("notice").hidden = !text;
   $("notice").className = error ? "error" : "";
+  // The notice sits above the planner; bring an error into view.
+  if (error && text) $("notice").scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+// The server explains a refused schedule in details.conflicts; show which time hit what.
+function errorText(e) {
+  const conflicts = e.data?.details?.conflicts;
+  if (!Array.isArray(conflicts) || !conflicts.length) return e.message;
+  const lines = conflicts.map((c) => {
+    const what = String(c.reason || "conflict").toLowerCase().replaceAll("_", " ");
+    const blocked = c.blockedFrom && c.blockedTo
+      ? ` (${clock(c.blockedFrom, zone)}–${clock(c.blockedTo, zone)})`
+      : "";
+    return `• ${clock(c.start, zone)}–${clock(c.end, zone)} overlaps ${what}${blocked}`;
+  });
+  return `${e.message}\n${lines.join("\n")}`;
 }
 async function api(path, method = "GET", body) {
   const response = await fetch(path, {
@@ -80,7 +95,7 @@ async function load(background = false) {
     render();
     $("new-plan").disabled = false;
   } catch (e) {
-    message(e.message, true);
+    message(errorText(e), true);
     if (background) return;
     $("teams").replaceChildren(
       el(
@@ -136,7 +151,7 @@ function render() {
   $("draft-count").textContent = drafts.size
     ? `${drafts.size} unsaved schedule${drafts.size === 1 ? "" : "s"}`
     : "";
-  $("save").hidden = $("discard").hidden = !drafts.size;
+  $("draft-bar").hidden = !drafts.size;
 }
 function startDrag(event, data) {
   if (drafts.size && data.kind === "plan") {
@@ -544,6 +559,117 @@ function renderWorkOrder(t, m, p) {
     renderTimeline(t, m, p),
   );
 }
+const STEP = 15 * 60000;
+let resizedAt = 0;
+// Adds a 15 minute draft slot; the edges are then adjusted with the handles.
+function addSlot(p, m, time) {
+  try {
+    const start = Date.parse(toUTC(p.day, time, zone)), end = start + STEP;
+    const order = state.orders.find((o) => o.id === p.workOrderId);
+    const free = (m.freeIntervals || []).some(
+      (f) => Date.parse(f.start) <= start && Date.parse(f.end) >= end,
+    );
+    if (!free || start < Date.parse(order.dropoffAt) || end > Date.parse(order.pickupAt))
+      throw Error("There are no free 15 minutes at this time for this work order.");
+    if (slots(p).some((o) => start < Date.parse(o.end) && Date.parse(o.start) < end))
+      throw Error("This work order already has a slot at this time.");
+    drafts.set(p.timePlanId, [
+      ...slots(p),
+      { id: null, start: new Date(start).toISOString(), end: new Date(end).toISOString() },
+    ]);
+    render();
+    message("Slot added to draft. Drag its edges to set the length, then save schedules.");
+  } catch (e) {
+    message(errorText(e), true);
+  }
+}
+// Edge moves stay on the 15 minute grid, inside the planner day, the vehicle
+// window and the neighbouring slots of the same work order; the server still has the last word.
+function resizedSlot(p, s, side, deltaMs) {
+  const dayStart = Date.parse(toUTC($("day").value, "06:00", zone)),
+    dayEnd = Date.parse(toUTC($("day").value, "18:00", zone));
+  const order = state.orders.find((o) => o.id === p.workOrderId);
+  let lo = Math.max(dayStart, Date.parse(order.dropoffAt)),
+    hi = Math.min(dayEnd, Date.parse(order.pickupAt));
+  const a = Date.parse(s.start), b = Date.parse(s.end);
+  for (const o of slots(p)) {
+    if (o === s) continue;
+    const os = Date.parse(o.start), oe = Date.parse(o.end);
+    if (oe <= a) lo = Math.max(lo, oe);
+    else if (os >= b) hi = Math.min(hi, os);
+  }
+  lo = dayStart + Math.ceil((lo - dayStart) / STEP) * STEP;
+  hi = dayStart + Math.floor((hi - dayStart) / STEP) * STEP;
+  return side === "start"
+    ? { start: Math.min(b - STEP, Math.max(lo, a + deltaMs)), end: b }
+    : { start: a, end: Math.max(a + STEP, Math.min(hi, b + deltaMs)) };
+}
+function commitResize(p, s, next, focusKey) {
+  const iso = (ms) => new Date(ms).toISOString();
+  drafts.set(
+    p.timePlanId,
+    slots(p).map((x) => (x === s ? { id: s.id, start: iso(next.start), end: iso(next.end) } : x)),
+  );
+  render();
+  message("Slot resized in draft. Save schedules to apply.");
+  if (focusKey) document.querySelector(`[data-handle="${focusKey}"]`)?.focus();
+}
+function resizeHandle(p, s, side, index, node, timeline) {
+  const key = `${p.timePlanId}:${index}:${side}`;
+  const changed = (n) => n.start !== Date.parse(s.start) || n.end !== Date.parse(s.end);
+  const show = (n) => {
+    const left = pos(new Date(n.start).toISOString()), right = pos(new Date(n.end).toISOString());
+    node.style.left = `${Math.max(0, left)}%`;
+    node.style.width = `${Math.min(100, right) - Math.max(0, left)}%`;
+    node.querySelector("small").textContent =
+      `${clock(n.start, zone)}–${clock(n.end, zone)}`;
+  };
+  return el("span", {
+    class: `slot-handle ${side}`,
+    role: "slider",
+    tabindex: "0",
+    "data-handle": key,
+    "aria-orientation": "horizontal",
+    "aria-label": `${side === "start" ? "Start" : "End"} of #${p.workOrderId} slot`,
+    "aria-valuetext": clock(side === "start" ? s.start : s.end, zone),
+    onclick: (event) => event.stopPropagation(),
+    onkeydown: (event) => {
+      event.stopPropagation();
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const next = resizedSlot(p, s, side, (event.key === "ArrowRight" ? 1 : -1) * STEP);
+      if (changed(next)) commitResize(p, s, next, key);
+    },
+    onpointerdown: (event) => {
+      // Without this the browser would start dragging the whole slot.
+      event.preventDefault();
+      event.stopPropagation();
+      const handle = event.currentTarget;
+      handle.setPointerCapture(event.pointerId);
+      node.draggable = false;
+      const msPerPx = (720 * 60000) / timeline.getBoundingClientRect().width;
+      const x0 = event.clientX;
+      let delta = 0;
+      const move = (e) => {
+        delta = Math.round(((e.clientX - x0) * msPerPx) / STEP) * STEP;
+        show(resizedSlot(p, s, side, delta));
+      };
+      const up = () => {
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        handle.removeEventListener("pointercancel", up);
+        node.draggable = true;
+        resizedAt = Date.now();
+        const next = resizedSlot(p, s, side, delta);
+        if (changed(next)) commitResize(p, s, next);
+        else show(next);
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+      handle.addEventListener("pointercancel", up);
+    },
+  });
+}
 function renderTimeline(t, m, p) {
   const timeline = el("div", { class: "timeline" });
   // The complement of server free time also includes occupied slots; slots draw over it.
@@ -571,7 +697,7 @@ function renderTimeline(t, m, p) {
         "aria-label": `${m.name}, ${p ? `#${p.workOrderId}, ` : ""}${time}, add scheduled time`,
         onclick: () =>
           p
-            ? slotModal(p, null, time)
+            ? addSlot(p, m, time)
             : message(
                 "Assign a work order to this employee before scheduling.",
                 true,
@@ -590,29 +716,36 @@ function renderTimeline(t, m, p) {
       right = pos(s.end);
     if (right <= 0 || left >= 100) continue;
     const status = s.hubStatus || s.hubSyncStatus || "PENDING";
-    timeline.append(
-      el(
-        "button",
-        {
-          class: `slot ${drafts.has(p.timePlanId) ? "draft" : ""} ${s.conflicts?.length ? "conflict" : ""} ${status === "REJECTED" ? "rejected" : ""}`,
-          title: status === "REJECTED" ? "Calendar rejected this time. Click to resolve." : `Calendar: ${status}`,
-          "aria-label": `#${p.workOrderId}, ${clock(s.start, zone)}–${clock(s.end, zone)}, calendar ${status.toLowerCase()}`,
-          style: `left:${Math.max(0, left)}%;width:${Math.min(100, right) - Math.max(0, left)}%`,
-          draggable: true,
-          ondragstart: (event) =>
-            startDrag(event, {
-              kind: "slot",
-              planId: p.timePlanId,
-              slotId: s.id,
-              slot: s,
-            }),
-          ondragend: endDrag,
-          onclick: () => editSlot(p, s),
+    const node = el(
+      "button",
+      {
+        class: `slot ${drafts.has(p.timePlanId) ? "draft" : ""} ${s.conflicts?.length ? "conflict" : ""} ${status === "REJECTED" ? "rejected" : ""}`,
+        title: status === "REJECTED" ? "Calendar rejected this time. Click to resolve." : `Calendar: ${status}`,
+        "aria-label": `#${p.workOrderId}, ${clock(s.start, zone)}–${clock(s.end, zone)}, calendar ${status.toLowerCase()}`,
+        style: `left:${Math.max(0, left)}%;width:${Math.min(100, right) - Math.max(0, left)}%`,
+        draggable: true,
+        ondragstart: (event) =>
+          startDrag(event, {
+            kind: "slot",
+            planId: p.timePlanId,
+            slotId: s.id,
+            slot: s,
+          }),
+        ondragend: endDrag,
+        onclick: () => {
+          // A click right after a resize gesture is the end of that gesture.
+          if (Date.now() - resizedAt > 300) editSlot(p, s);
         },
-        el("strong", {}, `#${p.workOrderId} ${status === "REJECTED" ? "⚠ Rejected" : status === "SYNCED" ? "" : "◷"}`),
-        el("small", {}, `${clock(s.start, zone)}–${clock(s.end, zone)}`),
-      ),
+      },
+      el("strong", {}, `#${p.workOrderId} ${status === "REJECTED" ? "⚠ Rejected" : status === "SYNCED" ? "" : "◷"}`),
+      el("small", {}, `${clock(s.start, zone)}–${clock(s.end, zone)}`),
     );
+    const index = slots(p).indexOf(s);
+    node.append(
+      resizeHandle(p, s, "start", index, node, timeline),
+      resizeHandle(p, s, "end", index, node, timeline),
+    );
+    timeline.append(node);
   }
   return timeline;
 }
@@ -663,7 +796,7 @@ function showModal(title, children, submit, label = "Save") {
     try {
       await submit();
     } catch (error) {
-      $("modal-error").textContent = error.message;
+      $("modal-error").textContent = errorText(error);
     } finally {
       $("modal-submit").disabled = false;
     }
@@ -712,7 +845,7 @@ function newPlan(teamId) {
   try {
     noDrafts();
   } catch (e) {
-    message(e.message, true);
+    message(errorText(e), true);
     return;
   }
   showModal(
@@ -794,23 +927,47 @@ function showHubRejections(items) {
     .map(slot => ({ plan, slot })));
   if (!rejected.length) return;
   for (const { plan, slot } of rejected) shownHubRejections.add(hubRejectionKey(plan, slot));
+  // Cards already dismissed with "Keep locally" are gone from the dialog and stay dismissed.
+  const unresolved = (current) => rejected.filter(other => other.slot.id !== current.id &&
+    $("modal-body").querySelector(`.hub-rejection[data-slot-id="${other.slot.id}"]`));
   showModal("Resolve calendar conflict", [
     el("p", { class: "detail" },
       "Your schedule was saved, but the calendar rejected these times because they are already occupied. Other slots are unaffected. Choose a new time, remove the slot, or keep it locally without a calendar event."),
-    ...rejected.map(({ plan, slot }) => el("section", { class: "hub-rejection" },
+    ...rejected.map(({ plan, slot }) => {
+      // Every card edits its own slot in place, so several conflicts can be resolved in one dialog.
+      const startInput = el("input", { type: "time", step: 900, required: true, value: clock(slot.start, zone), "aria-label": "New start" });
+      const endInput = el("input", { type: "time", step: 900, required: true, value: clock(slot.end, zone), "aria-label": "New end" });
+      return el("section", { class: "hub-rejection", "data-slot-id": slot.id },
       el("h3", {}, title(plan)),
       el("p", {}, `${allMembers().find(m => m.id === plan.memberId)?.name || "Employee"} · ${plan.day} · ${clock(slot.start, zone)}–${clock(slot.end, zone)} · ${zone}`),
       el("p", { class: "hub-rejection-status" }, "Calendar rejected · Not booked on Hub"),
+      el("div", { class: "fields" }, el("label", {}, "Start", startInput), el("label", {}, "End", endInput)),
       el("div", { class: "text-actions" },
-        el("button", { type: "button", onclick: () => {
-          close();
-          slotModal(plan, slot, clock(slot.start, zone));
+        el("button", { type: "button", onclick: async event => {
+          const button = event.currentTarget;
+          button.disabled = true;
+          try {
+            noDrafts();
+            const start = toUTC(plan.day, startInput.value, zone), end = toUTC(plan.day, endInput.value, zone);
+            if (end <= start) throw Error("End must be after start.");
+            const others = unresolved(slot);
+            await write(`${base}/${plan.timePlanId}/slots`, "PUT", {
+              expectedVersion: plan.version,
+              slots: plan.slots.map(({ id, start: s, end: e }) => id === slot.id ? { id, start, end } : { id, start: s, end: e }),
+            });
+            reopenHubRejections(others);
+          } catch (error) {
+            $("modal-error").textContent = errorText(error);
+          } finally {
+            button.disabled = false;
+          }
         } }, "Change time"),
         el("button", { type: "button", class: "danger-button", onclick: async event => {
           const button = event.currentTarget;
           button.disabled = true;
           try {
             noDrafts();
+            const others = unresolved(slot);
             for (const other of rejected) {
               if (other.slot.id !== slot.id) {
                 shownHubRejections.delete(hubRejectionKey(other.plan, other.slot));
@@ -821,8 +978,9 @@ function showHubRejections(items) {
               slots: plan.slots.filter(s => s.id !== slot.id).map(({ id, start, end }) => ({ id, start, end })),
             });
             message("Slot removed. Other scheduled times and planned duration are unchanged.");
+            reopenHubRejections(others);
           } catch (error) {
-            $("modal-error").textContent = error.message;
+            $("modal-error").textContent = errorText(error);
           } finally {
             button.disabled = false;
           }
@@ -833,8 +991,17 @@ function showHubRejections(items) {
           message("Slot kept locally. It is still rejected and has no Hub calendar booking.", true);
         } }, "Keep locally"),
       ),
-    )),
+    );
+    }),
   ], null);
+}
+// After one conflict is resolved, bring back the others that are still rejected.
+function reopenHubRejections(others) {
+  const ids = new Set(others.map(({ slot }) => slot.id));
+  const remaining = plans().flatMap(plan => (plan.slots || [])
+    .filter(slot => ids.has(slot.id) && slot.hubStatus === "REJECTED")
+    .map(slot => ({ plan, slot })));
+  if (remaining.length) showHubRejections(remaining);
 }
 function slotModal(p, s, time) {
   showModal(
@@ -998,7 +1165,7 @@ function movePlan(p, preset) {
   try {
     noDrafts();
   } catch (e) {
-    message(e.message, true);
+    message(errorText(e), true);
     return;
   }
   showModal(
@@ -1240,7 +1407,7 @@ async function dropMember(event, t, m, time) {
       });
     }
   } catch (e) {
-    message(e.message, true);
+    message(errorText(e), true);
   }
 }
 async function dropChip(p, t, m, time) {
@@ -1298,7 +1465,7 @@ async function dropTeam(event, t) {
         targetTeamId: t.id,
       });
   } catch (e) {
-    message(e.message, true);
+    message(errorText(e), true);
   }
 }
 $("close-modal").onclick = $("cancel-modal").onclick = close;
@@ -1316,7 +1483,7 @@ $("save").onclick = async () => {
     message("Schedules saved.");
     showActionRejections(result.hubSync || []);
   } catch (e) {
-    message(e.message, true);
+    message(errorText(e), true);
   }
 };
 $("discard").onclick = () => {
@@ -1379,7 +1546,7 @@ try {
   $("day").value = dayInZone(Date.now(), zone);
   await load();
 } catch (e) {
-  message(e.message, true);
+  message(errorText(e), true);
   $("teams").replaceChildren(
     el(
       "p",

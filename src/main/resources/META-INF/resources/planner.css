@@ -222,10 +222,27 @@ h3 {
 .panel-title p {
   margin: 0;
 }
+/* Floats at the bottom of the viewport so it stays reachable on long planners. */
 .draft-actions {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 20;
   display: flex;
   gap: 9px;
   align-items: center;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 24px rgba(32, 53, 46, 0.18);
+  font-size: 13px;
+}
+.draft-actions[hidden] {
+  display: none;
+}
+.draft-actions #draft-count {
+  color: var(--muted);
 }
 .legend {
   display: flex;
@@ -846,7 +863,11 @@ pre {
     gap: 10px;
   }
   .draft-actions {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
     flex-wrap: wrap;
+    justify-content: flex-end;
   }
 }
 
@@ -1012,3 +1033,21 @@ body[data-drag-kind] .member-info > * {
 .hub-rejection h3 { margin: 0 0 8px; font-size: 14px; }
 .hub-rejection p { font-size: 12px; line-height: 1.6; }
 .hub-rejection-status { color: #853b09; font-weight: 600; }
+.hub-rejection .fields { margin: 10px 0; }
+
+.slot-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  cursor: ew-resize;
+  touch-action: none;
+  z-index: 1;
+}
+.slot-handle.start { left: 0; }
+.slot-handle.end { right: 0; }
+.slot-handle:hover,
+.slot-handle:focus-visible {
+  background: rgba(60, 120, 50, 0.35);
+  outline: none;
+}

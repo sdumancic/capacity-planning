@@ -27,7 +27,7 @@ public class JdbcPlanningLockRepository implements PlanningLockRepository {
         T read(ResultSet result) throws SQLException;
     }
 
-    private <T> List<T> query(String sql, Read<T> read, Object...args) {
+    private <T> List<T> query(String sql, Read<T> read, Object... args) {
         try (var c = ds.getConnection(); var s = c.prepareStatement(sql)) {
             for (int i = 0; i < args.length; i++) {
                 s.setObject(i + 1, args[i]);
@@ -39,8 +39,7 @@ public class JdbcPlanningLockRepository implements PlanningLockRepository {
                 }
                 return out;
             }
-        }
-        catch (SQLException e) {
+        } catch (SQLException e) {
             throw failure(e);
         }
     }
@@ -53,18 +52,20 @@ public class JdbcPlanningLockRepository implements PlanningLockRepository {
     }
 
     private void lock(String key) {
-        // Ensure the database transaction exists before acquiring a transaction-owned lock.
-        query("IF @@TRANCOUNT=0 BEGIN TRANSACTION; DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource=?, @LockMode='Exclusive', @LockOwner='Transaction', @LockTimeout=5000; SELECT @r AS result", r -> {
-            if (r.getInt(1)<0) {
-                throw new Problem(409, "LOCK_TIMEOUT", "Planner busy; retry");
-            }
-            return 0;
-        }, key);
+        // Ensure the database transaction exists before acquiring a transaction-owned
+        // lock.
+        query("IF @@TRANCOUNT=0 BEGIN TRANSACTION; DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource=?, @LockMode='Exclusive', @LockOwner='Transaction', @LockTimeout=5000; SELECT @r AS result",
+                r -> {
+                    if (r.getInt(1) < 0) {
+                        throw new Problem(409, "LOCK_TIMEOUT", "Planner busy; retry");
+                    }
+                    return 0;
+                }, key);
     }
 
     public void lockAssignees(Collection<Plan> plans) {
         var keys = new TreeSet<String>();
-        for (var p:plans) {
+        for (var p : plans) {
             keys.add("team-day:" + p.teamId() + ":" + p.day());
             if (p.memberId() != null) {
                 keys.add("user-day:" + repo.assignee(p.teamId(), p.memberId()).userId() + ":" + p.day());
@@ -86,11 +87,13 @@ public class JdbcPlanningLockRepository implements PlanningLockRepository {
         String key = "hub-user-day:" + userId + ":" + day;
         Connection c = null;
         try {
-            // A session lock on a dedicated connection: hub calls run outside any DB transaction.
+            // A session lock on a dedicated connection: hub calls run outside any DB
+            // transaction.
             c = ds.getConnection();
             int result;
-            try (var s = c.prepareStatement("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource=?, @LockMode='Exclusive', "
-                    + "@LockOwner='Session', @LockTimeout=?; SELECT @r AS result")) {
+            try (var s = c
+                    .prepareStatement("DECLARE @r int; EXEC @r=sys.sp_getapplock @Resource=?, @LockMode='Exclusive', "
+                            + "@LockOwner='Session', @LockTimeout=?; SELECT @r AS result")) {
                 s.setString(1, key);
                 s.setLong(2, Math.max(0, timeout.toMillis()));
                 try (var r = s.executeQuery()) {
@@ -104,16 +107,16 @@ public class JdbcPlanningLockRepository implements PlanningLockRepository {
             }
             var connection = c;
             return Optional.of(() -> {
-                try (connection; var s = connection.prepareStatement(
-                        "EXEC sys.sp_releaseapplock @Resource=?, @LockOwner='Session'")) {
+                try (connection;
+                        var s = connection.prepareStatement(
+                                "EXEC sys.sp_releaseapplock @Resource=?, @LockOwner='Session'")) {
                     s.setString(1, key);
                     s.execute();
                 } catch (SQLException e) {
                     throw new IllegalStateException("Cannot release " + key, e);
                 }
             });
-        }
-        catch (SQLException e) {
+        } catch (SQLException e) {
             if (c != null) {
                 try {
                     c.close();

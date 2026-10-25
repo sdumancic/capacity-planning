@@ -9,13 +9,17 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.Executors;
 
-/** Reconciles slots with Hub Calendar outside any planning transaction (spec: Hub calendar integration). */
+/**
+ * Reconciles slots with Hub Calendar outside any planning transaction (spec:
+ * Hub calendar integration).
+ */
 @ApplicationScoped
 public class HubSyncService {
     private static final Logger LOG = Logger.getLogger(HubSyncService.class);
     static final String KEY = "service-portal:slot:";
     static final List<Duration> BACKOFF = List.of(Duration.ofSeconds(5), Duration.ofSeconds(30),
-            Duration.ofMinutes(2), Duration.ofMinutes(10), Duration.ofHours(1), Duration.ofHours(1), Duration.ofHours(1));
+            Duration.ofMinutes(2), Duration.ofMinutes(10), Duration.ofHours(1), Duration.ofHours(1),
+            Duration.ofHours(1));
     static final int MAX_ATTEMPTS = 8;
     static final int BATCH = 20;
     private static final Duration WORKER_LOCK_TIMEOUT = Duration.ofSeconds(5);
@@ -33,7 +37,9 @@ public class HubSyncService {
         this.budget = budget;
     }
 
-    enum Outcome { SYNCED, OVERLAP, RETRYABLE, FAILED, UNAVAILABLE }
+    enum Outcome {
+        SYNCED, OVERLAP, RETRYABLE, FAILED, UNAVAILABLE
+    }
 
     record Result(Outcome outcome, boolean slotDeleted, String error) {
         static Result of(Outcome outcome, String error) {
@@ -41,21 +47,29 @@ public class HubSyncService {
         }
     }
 
-    /** Replaces the pre-commit PENDING snapshot of an action result with the outcome of syncNow. */
+    /**
+     * Replaces the pre-commit PENDING snapshot of an action result with the outcome
+     * of syncNow.
+     */
     public Map<String, Object> afterCommit(Map<String, Object> result) {
         var ids = new LinkedHashSet<Long>();
         if (result.get("hubSync") instanceof List<?> sync) {
             for (var item : sync) {
-                if (item instanceof Map<?, ?> m && m.get("slotId") instanceof Number id) ids.add(id.longValue());
+                if (item instanceof Map<?, ?> m && m.get("slotId") instanceof Number id)
+                    ids.add(id.longValue());
             }
         }
-        if (ids.isEmpty()) return result;
+        if (ids.isEmpty())
+            return result;
         var out = new LinkedHashMap<>(result);
         out.put("hubSync", syncNow(ids));
         return out;
     }
 
-    /** Runs after COMMIT in the request: own messages only, 3 s budget, never throws. */
+    /**
+     * Runs after COMMIT in the request: own messages only, 3 s budget, never
+     * throws.
+     */
     public List<Map<String, Object>> syncNow(Collection<Long> slotIds) {
         try {
             var rows = repo.claim(slotIds);
@@ -64,9 +78,11 @@ public class HubSyncService {
             if (groups.size() == 1) {
                 processGroup(groups.getFirst(), deadline);
             } else if (!groups.isEmpty()) {
-                // Order matters only inside one person-day; different person-days run in parallel.
+                // Order matters only inside one person-day; different person-days run in
+                // parallel.
                 try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-                    for (var group : groups) executor.submit(() -> processGroup(group, deadline));
+                    for (var group : groups)
+                        executor.submit(() -> processGroup(group, deadline));
                 }
             }
         } catch (RuntimeException failure) {
@@ -77,7 +93,8 @@ public class HubSyncService {
 
     /** Scheduled worker: due messages and everything system handlers enqueued. */
     public void work() {
-        for (var group : groups(repo.claimDue(BATCH))) processGroup(group, null);
+        for (var group : groups(repo.claimDue(BATCH)))
+            processGroup(group, null);
         repo.oldestPending().filter(t -> t.isBefore(Instant.now().minus(Duration.ofMinutes(5))))
                 .ifPresent(t -> LOG.errorf("ALERT Hub outbox: oldest PENDING message is from %s", t));
     }
@@ -97,7 +114,8 @@ public class HubSyncService {
             item.put("slotId", id);
             // No sync row left: the slot was deleted and its event removed.
             item.put("status", s == null ? "SYNCED" : s.status());
-            if (s != null && s.errorCode() != null && !"PENDING".equals(s.status())) item.put("errorCode", s.errorCode());
+            if (s != null && s.errorCode() != null && !"PENDING".equals(s.status()))
+                item.put("errorCode", s.errorCode());
             out.add(item);
         }
         return out;
@@ -105,7 +123,8 @@ public class HubSyncService {
 
     private static List<List<Message>> groups(List<Message> rows) {
         var groups = new LinkedHashMap<String, List<Message>>();
-        for (var r : rows) groups.computeIfAbsent(r.userId() + ":" + r.day(), k -> new ArrayList<>()).add(r);
+        for (var r : rows)
+            groups.computeIfAbsent(r.userId() + ":" + r.day(), k -> new ArrayList<>()).add(r);
         return new ArrayList<>(groups.values());
     }
 
@@ -113,7 +132,8 @@ public class HubSyncService {
         var first = rows.getFirst();
         var timeout = deadline == null ? WORKER_LOCK_TIMEOUT : Duration.between(Instant.now(), deadline);
         var remaining = new ArrayList<>(rows);
-        try (var lock = locks.lockHubUserDay(first.userId(), first.day(), timeout.isNegative() ? Duration.ZERO : timeout)
+        try (var lock = locks
+                .lockHubUserDay(first.userId(), first.day(), timeout.isNegative() ? Duration.ZERO : timeout)
                 .orElse(null)) {
             if (lock == null) {
                 remaining.forEach(repo::release);
@@ -137,17 +157,21 @@ public class HubSyncService {
                     continue;
                 }
                 var result = reconcile(r.slotId());
-                if (result.outcome() == Outcome.UNAVAILABLE) open = true;
+                if (result.outcome() == Outcome.UNAVAILABLE)
+                    open = true;
                 if (result.outcome() == Outcome.OVERLAP && i < ordered.size() - 1) {
-                    // Another message of this person-day may free the time (swap); try once more at the end.
+                    // Another message of this person-day may free the time (swap); try once more at
+                    // the end.
                     retry.add(r);
                     continue;
                 }
                 finish(r, result, remaining);
             }
             for (var r : retry) {
-                if (open || expired(deadline)) release(r, remaining);
-                else finish(r, reconcile(r.slotId()), remaining);
+                if (open || expired(deadline))
+                    release(r, remaining);
+                else
+                    finish(r, reconcile(r.slotId()), remaining);
             }
         } catch (RuntimeException failure) {
             LOG.warnf(failure, "Hub synchronization of user %d on %s stopped", first.userId(), first.day());
@@ -176,8 +200,10 @@ public class HubSyncService {
         try {
             if (job.event() == null) {
                 // Slot deleted: find the event by key if a crash lost the link.
-                if (id == null) id = hub.findByExternalId(KEY + slotId).map(HubCalendarClient.HubEvent::id).orElse(null);
-                if (id != null) delete(id);
+                if (id == null)
+                    id = hub.findByExternalId(KEY + slotId).map(HubCalendarClient.HubEvent::id).orElse(null);
+                if (id != null)
+                    delete(id);
                 return new Result(Outcome.SYNCED, true, null);
             }
             if (id != null) {
@@ -185,7 +211,8 @@ public class HubSyncService {
                     hub.update(id, job.event());
                     return Result.of(Outcome.SYNCED, null);
                 } catch (HubCalendarException e) {
-                    if (e.statusCode() != 404) throw e;
+                    if (e.statusCode() != 404)
+                        throw e;
                     repo.eventId(slotId, null);
                     id = null;
                 }
@@ -197,10 +224,12 @@ public class HubSyncService {
             id = created.id();
             repo.eventId(slotId, id);
             // An earlier attempt may have created an older state under the same key.
-            if (!job.event().equals(created.event())) hub.update(id, job.event());
+            if (!job.event().equals(created.event()))
+                hub.update(id, job.event());
             return Result.of(Outcome.SYNCED, null);
         } catch (HubCalendarException e) {
-            if (e.statusCode() == 409 && job.event() != null) return overlap(slotId, id);
+            if (e.statusCode() == 409 && job.event() != null)
+                return overlap(slotId, id);
             return classify(e);
         } catch (HubCircuitOpenException e) {
             return Result.of(Outcome.UNAVAILABLE, e.getMessage());
@@ -211,7 +240,8 @@ public class HubSyncService {
 
     private Result overlap(long slotId, String id) {
         if (id != null) {
-            // A refused update would leave the event at the old time and, after a move, with the old member.
+            // A refused update would leave the event at the old time and, after a move,
+            // with the old member.
             try {
                 delete(id);
             } catch (HubCircuitOpenException e) {
@@ -229,7 +259,8 @@ public class HubSyncService {
         try {
             hub.delete(id);
         } catch (HubCalendarException e) {
-            if (e.statusCode() != 404) throw e;
+            if (e.statusCode() != 404)
+                throw e;
         }
     }
 

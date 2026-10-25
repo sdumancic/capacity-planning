@@ -10,12 +10,14 @@ import java.util.*;
 public class TimeSlotService {
     private final PlanningRepository repo;
     private final CommonPlanningService common;
+
     public TimeSlotService(PlanningRepository repo, CommonPlanningService common) {
         this.repo = repo;
         this.common = common;
     }
 
-    List<Map<String, Object>> conflicts(Plan p, Set<Long> excluded, List<Plan> finalPlans, List<Map<String, Object>> warnings) {
+    List<Map<String, Object>> conflicts(Plan p, Set<Long> excluded, List<Plan> finalPlans,
+            List<Map<String, Object>> warnings) {
         var out = new ArrayList<Map<String, Object>>();
         if (p.memberId() == null) {
             if (!p.slots().isEmpty()) {
@@ -33,16 +35,17 @@ public class TimeSlotService {
         var shifts = Policy.union(repo.shifts(a, p.day()));
         var blocks = new ArrayList<>(repo.blocks(a.userId(), p.day(), false));
         blocks.addAll(repo.booked(a.userId(), p.day(), excluded));
-        for (var q:finalPlans) {
-            if (q.id() != p.id() && q.memberId() != null && repo.assignee(q.teamId(), q.memberId()).userId().equals(a.userId())) {
-                for (var s:q.slots()) {
+        for (var q : finalPlans) {
+            if (q.id() != p.id() && q.memberId() != null
+                    && repo.assignee(q.teamId(), q.memberId()).userId().equals(a.userId())) {
+                for (var s : q.slots()) {
                     blocks.add(new Interval(s.id(), s.start(), s.end(), "BOOKED", q.workOrderId()));
                 }
             }
         }
         var order = repo.order(p.workOrderId());
         var ids = new HashSet<Long>();
-        for (int i = 0; i<p.slots().size(); i++) {
+        for (int i = 0; i < p.slots().size(); i++) {
             var s = p.slots().get(i);
             if (s == null) {
                 throw Problem.bad("Null slot");
@@ -57,18 +60,19 @@ public class TimeSlotService {
             if (shifts.stream().noneMatch(x -> !s.start().isBefore(x.start()) && !s.end().isAfter(x.end()))) {
                 out.add(conflict(s, s.start(), s.end(), "OUTSIDE_SHIFT", null));
             }
-            for (var b:blocks) {
+            for (var b : blocks) {
                 if (Policy.overlap(s.start(), s.end(), b.start(), b.end())) {
-                    out.add(conflict(s, s.start().isAfter(b.start())?s.start():b.start(), s.end().isBefore(b.end())?s.end():b.end(), b.reason(), b.workOrderId()));
+                    out.add(conflict(s, s.start().isAfter(b.start()) ? s.start() : b.start(),
+                            s.end().isBefore(b.end()) ? s.end() : b.end(), b.reason(), b.workOrderId()));
                 }
             }
-            for (int j = 0; j<i; j++) {
+            for (int j = 0; j < i; j++) {
                 var b = p.slots().get(j);
                 if (Policy.overlap(s.start(), s.end(), b.start(), b.end())) {
                     out.add(conflict(s, b.start(), b.end(), "BOOKED", p.workOrderId()));
                 }
             }
-            for (var b:repo.blocks(a.userId(), p.day(), true)) {
+            for (var b : repo.blocks(a.userId(), p.day(), true)) {
                 if (Policy.overlap(s.start(), s.end(), b.start(), b.end())) {
                     var w = new LinkedHashMap<String, Object>();
                     w.put("code", "SLOT_OVERLAPS_PENDING_ABSENCE");
@@ -96,12 +100,12 @@ public class TimeSlotService {
     }
 
     List<Slot> requested(Plan p, List<Slot> slots) {
-        if (slots == null || slots.size()>100) {
+        if (slots == null || slots.size() > 100) {
             throw Problem.bad("slots required; at most 100");
         }
         var ids = new HashSet<Long>();
         p.slots().forEach(s -> ids.add(s.id()));
-        for (var s:slots) {
+        for (var s : slots) {
             if (s == null || s.id() != null && !ids.contains(s.id())) {
                 throw new Problem(404, "TIME_PLAN_NOT_FOUND", "Slot id does not belong to time plan");
             }
@@ -118,7 +122,9 @@ public class TimeSlotService {
                 Policy.grid(slot.start(), slot.end(), p.day(), common.zone());
                 for (int j = 0; j <= i; j++) {
                     var q = plans.get(j);
-                    if (!repo.assignee(q.teamId(), q.memberId()).userId().equals(user)) { continue; }
+                    if (!repo.assignee(q.teamId(), q.memberId()).userId().equals(user)) {
+                        continue;
+                    }
                     int end = j == i ? si : q.slots().size();
                     for (int k = 0; k < end; k++) {
                         var other = q.slots().get(k);

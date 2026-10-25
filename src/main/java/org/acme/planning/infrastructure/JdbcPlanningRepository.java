@@ -16,30 +16,31 @@ public class JdbcPlanningRepository implements PlanningRepository {
     private final DataSource ds;
     private final ObjectMapper json;
     private final CurrentUser currentUser;
+
     public JdbcPlanningRepository(DataSource ds, ObjectMapper json, CurrentUser user) {
         this.ds = ds;
         this.json = json;
         this.currentUser = user;
     }
+
     interface Read<T> {
         T read(ResultSet r) throws SQLException;
     }
 
     private void bind(PreparedStatement s, Object... args) throws SQLException {
-        for (int i = 0; i<args.length; i++) {
+        for (int i = 0; i < args.length; i++) {
             Object v = args[i];
             if (v instanceof Instant x) {
                 s.setTimestamp(i + 1, Timestamp.from(x), Calendar.getInstance(TimeZone.getTimeZone("UTC")));
                 continue;
-            }
-            else if (v instanceof LocalDate d) {
+            } else if (v instanceof LocalDate d) {
                 v = java.sql.Date.valueOf(d);
             }
             s.setObject(i + 1, v);
         }
     }
 
-    private <T> List<T> query(String sql, Read<T> read, Object...args) {
+    private <T> List<T> query(String sql, Read<T> read, Object... args) {
         try (var c = ds.getConnection(); var s = c.prepareStatement(sql)) {
             bind(s, args);
             try (var r = s.executeQuery()) {
@@ -49,8 +50,7 @@ public class JdbcPlanningRepository implements PlanningRepository {
                 }
                 return out;
             }
-        }
-        catch (SQLException e) {
+        } catch (SQLException e) {
             throw failure(e);
         }
     }
@@ -62,17 +62,16 @@ public class JdbcPlanningRepository implements PlanningRepository {
         return new IllegalStateException("Persistence operation failed", e);
     }
 
-    private int update(String sql, Object...args) {
+    private int update(String sql, Object... args) {
         try (var c = ds.getConnection(); var s = c.prepareStatement(sql)) {
             bind(s, args);
             return s.executeUpdate();
-        }
-        catch (SQLException e) {
+        } catch (SQLException e) {
             throw failure(e);
         }
     }
 
-    private long insert(String sql, Object...args) {
+    private long insert(String sql, Object... args) {
         try (var c = ds.getConnection(); var s = c.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
             bind(s, args);
             s.executeUpdate();
@@ -82,15 +81,14 @@ public class JdbcPlanningRepository implements PlanningRepository {
                 }
                 return r.getLong(1);
             }
-        }
-        catch (SQLException e) {
+        } catch (SQLException e) {
             throw failure(e);
         }
     }
 
     private static Integer nullable(ResultSet r, String n) throws SQLException {
         int v = r.getInt(n);
-        return r.wasNull()?null:v;
+        return r.wasNull() ? null : v;
     }
 
     private static Instant instant(ResultSet r, String n) throws SQLException {
@@ -99,11 +97,15 @@ public class JdbcPlanningRepository implements PlanningRepository {
 
     private Plan plan(ResultSet r) throws SQLException {
         long id = r.getLong("id");
-        return new Plan(id, r.getInt("work_order_id"), r.getInt("team_id"), nullable(r, "member_id"), r.getDate("day").toLocalDate(), r.getInt("planned_minutes"), r.getInt("version"), slots(id));
+        return new Plan(id, r.getInt("work_order_id"), r.getInt("team_id"), nullable(r, "member_id"),
+                r.getDate("day").toLocalDate(), r.getInt("planned_minutes"), r.getInt("version"), slots(id));
     }
 
     private List<Slot> slots(long id) {
-        return query("SELECT s.id,s.start_at,s.end_at,COALESCE(h.status,'PENDING') AS hub_status FROM dbo.work_order_time_slot s LEFT JOIN dbo.slot_hub_sync h ON h.slot_id=s.id WHERE s.time_plan_id=? ORDER BY s.start_at,s.id", r -> new Slot(r.getLong("id"), instant(r, "start_at"), instant(r, "end_at"), r.getString("hub_status")), id);
+        return query(
+                "SELECT s.id,s.start_at,s.end_at,COALESCE(h.status,'PENDING') AS hub_status FROM dbo.work_order_time_slot s LEFT JOIN dbo.slot_hub_sync h ON h.slot_id=s.id WHERE s.time_plan_id=? ORDER BY s.start_at,s.id",
+                r -> new Slot(r.getLong("id"), instant(r, "start_at"), instant(r, "end_at"), r.getString("hub_status")),
+                id);
     }
 
     public Plan find(long id) {
@@ -115,7 +117,9 @@ public class JdbcPlanningRepository implements PlanningRepository {
     }
 
     public List<Plan> list(LocalDate day, Integer order) {
-        return query("SELECT * FROM dbo.work_order_time_plan WHERE (? IS NULL OR [day]=?) AND (? IS NULL OR work_order_id=?) ORDER BY id", this::plan, day, day, order, order);
+        return query(
+                "SELECT * FROM dbo.work_order_time_plan WHERE (? IS NULL OR [day]=?) AND (? IS NULL OR work_order_id=?) ORDER BY id",
+                this::plan, day, day, order, order);
     }
 
     public List<Plan> personPlans(int user, LocalDate day) {
@@ -126,12 +130,15 @@ public class JdbcPlanningRepository implements PlanningRepository {
     }
 
     public Plan target(int order, int team, Integer member, LocalDate day) {
-        var a = query("SELECT * FROM dbo.work_order_time_plan WHERE work_order_id=? AND team_id=? AND ((member_id IS NULL AND ? IS NULL) OR member_id=?) AND [day]=?", this::plan, order, team, member, member, day);
-        return a.isEmpty()?null:a.getFirst();
+        var a = query(
+                "SELECT * FROM dbo.work_order_time_plan WHERE work_order_id=? AND team_id=? AND ((member_id IS NULL AND ? IS NULL) OR member_id=?) AND [day]=?",
+                this::plan, order, team, member, member, day);
+        return a.isEmpty() ? null : a.getFirst();
     }
 
     public Order order(int id) {
-        var a = query("SELECT * FROM dbo.work_order WHERE id=?", r -> new Order(r.getInt("id"), r.getInt("dealer_id"), r.getString("title"), instant(r, "dropoff_at"), instant(r, "pickup_at")), id);
+        var a = query("SELECT * FROM dbo.work_order WHERE id=?", r -> new Order(r.getInt("id"), r.getInt("dealer_id"),
+                r.getString("title"), instant(r, "dropoff_at"), instant(r, "pickup_at")), id);
         if (a.isEmpty()) {
             throw new Problem(404, "ORDER_NOT_FOUND", "Work order not found");
         }
@@ -140,7 +147,11 @@ public class JdbcPlanningRepository implements PlanningRepository {
 
     public Assignee assignee(Integer team, Integer member) {
         if (member != null) {
-            var a = query("SELECT m.id,m.team_id,m.pp_member_id,m.enabled,t.enabled AS team_enabled,t.pp_dealer_id FROM dbo.pp_team_member m JOIN dbo.pp_team t ON t.id=m.team_id WHERE m.id=?", r -> new Assignee(r.getInt("team_id"), r.getInt("id"), r.getInt("pp_dealer_id"), r.getInt("pp_member_id"), r.getBoolean("enabled") && r.getBoolean("team_enabled")), member);
+            var a = query(
+                    "SELECT m.id,m.team_id,m.pp_member_id,m.enabled,t.enabled AS team_enabled,t.pp_dealer_id FROM dbo.pp_team_member m JOIN dbo.pp_team t ON t.id=m.team_id WHERE m.id=?",
+                    r -> new Assignee(r.getInt("team_id"), r.getInt("id"), r.getInt("pp_dealer_id"),
+                            r.getInt("pp_member_id"), r.getBoolean("enabled") && r.getBoolean("team_enabled")),
+                    member);
             if (a.isEmpty()) {
                 throw Problem.bad("Unknown member");
             }
@@ -152,7 +163,8 @@ public class JdbcPlanningRepository implements PlanningRepository {
         if (team == null) {
             throw Problem.bad("Target team or member is required");
         }
-        var a = query("SELECT * FROM dbo.pp_team WHERE id=?", r -> new Assignee(r.getInt("id"), null, r.getInt("pp_dealer_id"), null, r.getBoolean("enabled")), team);
+        var a = query("SELECT * FROM dbo.pp_team WHERE id=?",
+                r -> new Assignee(r.getInt("id"), null, r.getInt("pp_dealer_id"), null, r.getBoolean("enabled")), team);
         if (a.isEmpty()) {
             throw Problem.bad("Unknown team");
         }
@@ -163,7 +175,7 @@ public class JdbcPlanningRepository implements PlanningRepository {
 
     private static Capacity capacityRow(ResultSet r) throws SQLException {
         return new Capacity(r.getInt("shift_minutes"), r.getInt("blocked_minutes"),
-                r.getInt("attended_minutes"), nullable(r,"productivity_percent"),
+                r.getInt("attended_minutes"), nullable(r, "productivity_percent"),
                 r.getInt("capacity_minutes"), r.getInt("booked_minutes"),
                 r.getInt("available_minutes"), r.getInt("pending_absence_minutes"));
     }
@@ -177,24 +189,31 @@ public class JdbcPlanningRepository implements PlanningRepository {
     }
 
     private Capacity missingCapacity(int team, Integer member, LocalDate day) {
-        // The supplied grid omits disabled/empty teams; their remaining plans still count as booked.
+        // The supplied grid omits disabled/empty teams; their remaining plans still
+        // count as booked.
         int booked = query("""
                 SELECT COALESCE(SUM(planned_minutes),0) booked FROM dbo.work_order_time_plan
                 WHERE team_id=? AND [day]=? AND (? IS NULL OR member_id=?)
                 """, r -> r.getInt("booked"), team, day, member, member).getFirst();
-        return new Capacity(0,0,0,member == null ? null : 100,0,booked,-booked,0);
+        return new Capacity(0, 0, 0, member == null ? null : 100, 0, booked, -booked, 0);
     }
 
-    /** All capacity rows of one dealer and day, keyed team:member ("team:" for the team row). */
+    /**
+     * All capacity rows of one dealer and day, keyed team:member ("team:" for the
+     * team row).
+     */
     private Map<String, Capacity> capacities(int dealer, LocalDate day) {
         var out = new HashMap<String, Capacity>();
-        query(CAPACITY_ROWS, r -> out.put(r.getInt("team_id") + ":" + Objects.toString(nullable(r, "member_id"), ""), capacityRow(r)),
+        query(CAPACITY_ROWS,
+                r -> out.put(r.getInt("team_id") + ":" + Objects.toString(nullable(r, "member_id"), ""),
+                        capacityRow(r)),
                 dealer, day, day);
         return out;
     }
 
     public List<Interval> shifts(Assignee a, LocalDate day) {
-        if (!a.enabled()) return List.of();
+        if (!a.enabled())
+            return List.of();
         return query("""
                 SELECT DISTINCT
                     CASE WHEN ex.start_time IS NOT NULL THEN GREATEST(s.start_time,ex.start_time)
@@ -218,7 +237,8 @@ public class JdbcPlanningRepository implements PlanningRepository {
     }
 
     private ZoneId zone() {
-        return ZoneId.of(org.eclipse.microprofile.config.ConfigProvider.getConfig().getValue("capacity.business-zone", String.class));
+        return ZoneId.of(org.eclipse.microprofile.config.ConfigProvider.getConfig().getValue("capacity.business-zone",
+                String.class));
     }
 
     private List<Interval> breaks(Assignee a, LocalDate day) {
@@ -245,40 +265,51 @@ public class JdbcPlanningRepository implements PlanningRepository {
         var out = new ArrayList<>(query("""
                 SELECT absence_id,start_at,end_at FROM dbo.user_absence
                 WHERE pp_user_id=? AND enabled=1 AND status_code=? AND start_at<? AND end_at>?
-                """, r -> new Interval(r.getLong("absence_id"), instant(r,"start_at"), instant(r,"end_at"),
+                """, r -> new Interval(r.getLong("absence_id"), instant(r, "start_at"), instant(r, "end_at"),
                 pending ? "PENDING_ABSENCE" : "ABSENCE", null), user, pending ? "PENDING" : "APPROVED", to, from));
-        if (!pending) out.addAll(query("""
-                SELECT e.id,e.start_at,e.end_at FROM dbo.calendar_event e
-                JOIN dbo.calendar_event_participant p ON p.event_id=e.id
-                WHERE p.pp_user_id=? AND e.deleted=0 AND e.status_code NOT IN ('CANCELLED')
-                    AND e.start_at<? AND e.end_at>?
-                """, r -> new Interval(r.getLong("id"), instant(r,"start_at"), instant(r,"end_at"),
-                "HUB_EVENT", null), user, to, from));
+        if (!pending)
+            out.addAll(query("""
+                    SELECT e.id,e.start_at,e.end_at FROM dbo.calendar_event e
+                    JOIN dbo.calendar_event_participant p ON p.event_id=e.id
+                    WHERE p.pp_user_id=? AND e.deleted=0 AND e.status_code NOT IN ('CANCELLED')
+                        AND e.start_at<? AND e.end_at>?
+                    """, r -> new Interval(r.getLong("id"), instant(r, "start_at"), instant(r, "end_at"),
+                    "HUB_EVENT", null), user, to, from));
         return out;
     }
 
     public List<Interval> booked(int user, LocalDate day, Set<Long> excluded) {
-        return query("SELECT s.id,s.start_at,s.end_at,p.id AS plan_id,p.work_order_id FROM dbo.work_order_time_slot s JOIN dbo.work_order_time_plan p ON p.id=s.time_plan_id JOIN dbo.pp_team_member m ON m.id=p.member_id WHERE m.pp_member_id=? AND p.[day]=?", r -> excluded.contains(r.getLong("plan_id"))?null:new Interval(r.getLong("id"), instant(r, "start_at"), instant(r, "end_at"), "BOOKED", r.getInt("work_order_id")), user, day).stream().filter(Objects::nonNull).toList();
+        return query(
+                "SELECT s.id,s.start_at,s.end_at,p.id AS plan_id,p.work_order_id FROM dbo.work_order_time_slot s JOIN dbo.work_order_time_plan p ON p.id=s.time_plan_id JOIN dbo.pp_team_member m ON m.id=p.member_id WHERE m.pp_member_id=? AND p.[day]=?",
+                r -> excluded.contains(r.getLong("plan_id")) ? null
+                        : new Interval(r.getLong("id"), instant(r, "start_at"), instant(r, "end_at"), "BOOKED",
+                                r.getInt("work_order_id")),
+                user, day).stream().filter(Objects::nonNull).toList();
     }
 
     public Plan save(Plan p) {
         long id = p.id();
         if (id == 0) {
             Integer by = CurrentUser.current(currentUser);
-            id = insert("INSERT dbo.work_order_time_plan(work_order_id,team_id,member_id,[day],planned_minutes,created_by,modified_by) VALUES(?,?,?,?,?,?,?)", p.workOrderId(), p.teamId(), p.memberId(), p.day(), p.plannedMinutes(), by, by);
-        }
-        else if (update("UPDATE dbo.work_order_time_plan SET team_id=?,member_id=?,planned_minutes=?,version=version+1,modified_at=SYSUTCDATETIME(),modified_by=? WHERE id=? AND version=?", p.teamId(), p.memberId(), p.plannedMinutes(), CurrentUser.current(currentUser), id, p.version()) != 1) {
+            id = insert(
+                    "INSERT dbo.work_order_time_plan(work_order_id,team_id,member_id,[day],planned_minutes,created_by,modified_by) VALUES(?,?,?,?,?,?,?)",
+                    p.workOrderId(), p.teamId(), p.memberId(), p.day(), p.plannedMinutes(), by, by);
+        } else if (update(
+                "UPDATE dbo.work_order_time_plan SET team_id=?,member_id=?,planned_minutes=?,version=version+1,modified_at=SYSUTCDATETIME(),modified_by=? WHERE id=? AND version=?",
+                p.teamId(), p.memberId(), p.plannedMinutes(), CurrentUser.current(currentUser), id, p.version()) != 1) {
             throw new Problem(409, "VERSION_CONFLICT", "Time plan changed; reload");
         }
         var wanted = new HashSet<Long>();
-        for (var s:p.slots()) {
+        for (var s : p.slots()) {
             if (s.id() != null) {
-                update("UPDATE dbo.work_order_time_slot SET time_plan_id=?,start_at=?,end_at=? WHERE id=?", id, s.start(), s.end(), s.id());
+                update("UPDATE dbo.work_order_time_slot SET time_plan_id=?,start_at=?,end_at=? WHERE id=?", id,
+                        s.start(), s.end(), s.id());
                 wanted.add(s.id());
-            }
-            else wanted.add(insert("INSERT dbo.work_order_time_slot(time_plan_id,start_at,end_at) VALUES(?,?,?)", id, s.start(), s.end()));
+            } else
+                wanted.add(insert("INSERT dbo.work_order_time_slot(time_plan_id,start_at,end_at) VALUES(?,?,?)", id,
+                        s.start(), s.end()));
         }
-        for (var old:slots(id)) {
+        for (var old : slots(id)) {
             if (!wanted.contains(old.id())) {
                 update("DELETE dbo.work_order_time_slot WHERE id=?", old.id());
             }
@@ -310,9 +341,8 @@ public class JdbcPlanningRepository implements PlanningRepository {
 
     private String snapshot(Plan p) {
         try {
-            return p == null?null:json.writeValueAsString(PlanningViews.plan(p));
-        }
-        catch (Exception e) {
+            return p == null ? null : json.writeValueAsString(PlanningViews.plan(p));
+        } catch (Exception e) {
             throw new IllegalStateException(e);
         }
     }
@@ -322,11 +352,13 @@ public class JdbcPlanningRepository implements PlanningRepository {
     }
 
     @Override
-    public void logMove(String op, Plan before, Plan after, Long related, UUID correlation, Integer minutes, Plan source, Plan target) {
+    public void logMove(String op, Plan before, Plan after, Long related, UUID correlation, Integer minutes,
+            Plan source, Plan target) {
         writeLog(op, before, after, related, correlation, minutes, source, target);
     }
 
-    private void writeLog(String op, Plan before, Plan after, Long related, UUID correlation, Integer minutes, Plan source, Plan target) {
+    private void writeLog(String op, Plan before, Plan after, Long related, UUID correlation, Integer minutes,
+            Plan source, Plan target) {
         Plan p = after == null ? before : after;
         update("INSERT dbo.work_order_time_plan_log(correlation_id,time_plan_id,related_time_plan_id,work_order_id,operation,from_team_id,from_member_id,to_team_id,to_member_id,minutes,before_state,after_state,initiated_by,changed_by_user_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 correlation, p.id(), related, p.workOrderId(), op,
@@ -338,7 +370,7 @@ public class JdbcPlanningRepository implements PlanningRepository {
     private Map<String, Object> row(ResultSet r) throws SQLException {
         var m = new LinkedHashMap<String, Object>();
         var md = r.getMetaData();
-        for (int i = 1; i<=md.getColumnCount(); i++) {
+        for (int i = 1; i <= md.getColumnCount(); i++) {
             Object v = r.getObject(i);
             if (v instanceof Timestamp t) {
                 v = r.getTimestamp(i, Calendar.getInstance(TimeZone.getTimeZone("UTC"))).toInstant().toString();
@@ -387,7 +419,7 @@ public class JdbcPlanningRepository implements PlanningRepository {
         var orders = query("""
                 SELECT id,dealer_id AS dealerId,title,dropoff_at AS dropoffAt,pickup_at AS pickupAt
                 FROM dbo.work_order WHERE (? IS NULL OR dealer_id=?) ORDER BY id
-                """, this::row,dealer,dealer);
+                """, this::row, dealer, dealer);
         var absences = query("""
                 SELECT a.absence_id AS id,a.pp_user_id AS userId,a.start_at AS start,
                     a.end_at AS [end],a.status_code AS status
@@ -395,11 +427,11 @@ public class JdbcPlanningRepository implements PlanningRepository {
                     AND (? IS NULL OR EXISTS(SELECT 1 FROM dbo.pp_team_member m
                         JOIN dbo.pp_team t ON t.id=m.team_id
                         WHERE m.pp_member_id=a.pp_user_id AND t.pp_dealer_id=?))
-                """, this::row,day.plusDays(1).atStartOfDay(zone()).toInstant(),
-                day.atStartOfDay(zone()).toInstant(),dealer,dealer);
+                """, this::row, day.plusDays(1).atStartOfDay(zone()).toInstant(),
+                day.atStartOfDay(zone()).toInstant(), dealer, dealer);
         // The application service adds timePlans with their read conflicts.
-        return Map.of("day",day,"businessZone",businessZone,"dealers",dealers,"teams",teams,
-                "orders",orders,"absences",absences);
+        return Map.of("day", day, "businessZone", businessZone, "dealers", dealers, "teams", teams,
+                "orders", orders, "absences", absences);
     }
 
     private List<Map<String, Object>> free(Assignee a, LocalDate day, List<Interval> blocked) {
@@ -410,15 +442,14 @@ public class JdbcPlanningRepository implements PlanningRepository {
         var blocks = new ArrayList<>(blocked);
         blocks.addAll(booked(a.userId(), day, Set.of()));
         var out = new ArrayList<Map<String, Object>>();
-        for (var s:intervals) {
+        for (var s : intervals) {
             var pieces = new ArrayList<>(List.of(s));
-            for (var b:blocks) {
+            for (var b : blocks) {
                 var next = new ArrayList<Interval>();
-                for (var p:pieces) {
+                for (var p : pieces) {
                     if (!org.acme.planning.domain.Policy.overlap(p.start(), p.end(), b.start(), b.end())) {
                         next.add(p);
-                    }
-                    else {
+                    } else {
                         if (p.start().isBefore(b.start())) {
                             next.add(new Interval(null, p.start(), b.start(), "FREE", null));
                         }
@@ -429,7 +460,7 @@ public class JdbcPlanningRepository implements PlanningRepository {
                 }
                 pieces = next;
             }
-            for (var p:pieces) {
+            for (var p : pieces) {
                 out.add(Map.of("start", p.start(), "end", p.end()));
             }
         }

@@ -54,12 +54,10 @@ export default async function smoke(page) {
   if (await page.locator("#modal").evaluate(d => d.open)) throw Error("A reload must not open the conflict dialog");
   if (await page.locator(".slot.rejected").count() !== 1) throw Error("Rejected slot stays marked after reload");
   await page.locator(".slot.rejected").click();
+  // Each conflict card edits its own slot in place and saves it directly.
+  await page.locator(".hub-rejection input[aria-label='New start']").fill("11:00");
+  await page.locator(".hub-rejection input[aria-label='New end']").fill("12:00");
   await page.getByRole("button", {name:"Change time",exact:true}).click();
-  await page.getByRole("heading", {name:"Edit scheduled time"}).waitFor();
-  await page.locator("#start").fill("11:00");
-  await page.locator("#end").fill("12:00");
-  await page.locator("#modal-submit").click();
-  await page.getByRole("button", {name:"Save schedules",exact:true}).click();
   await page.getByRole("heading", {name:"Resolve calendar conflict"}).waitFor({timeout:10000});
   await page.setViewportSize({width:390,height:844});
   if (await page.locator("#modal").evaluate(d => d.getBoundingClientRect().right > innerWidth)) throw Error("Conflict dialog overflows mobile viewport");

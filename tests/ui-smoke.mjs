@@ -209,8 +209,30 @@ export default async function smoke(page) {
       exact: true,
     })
     .click();
-  await page.locator("#end").fill("11:30");
-  await page.locator("#modal-submit").click();
+  // A cell click adds a 15 minute draft slot; its edges are then adjusted with the handles.
+  const childSlot = ana.locator(
+    '.work-order-row[data-work-order-id="1511"] .slot',
+  );
+  if ((await childSlot.locator("small").textContent()) !== "11:00–11:15")
+    throw Error("Cell click must add a 15 minute draft slot");
+  const endHandle = childSlot.locator(".slot-handle.end");
+  await endHandle.focus();
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  if ((await childSlot.locator("small").textContent()) !== "11:00–11:45")
+    throw Error("Arrow keys must lengthen the slot by 15 minutes each");
+  // Pointer drag on the left handle moves the start by whole 15 minute cells.
+  const cell = await ana
+    .locator(".work-order-row[data-work-order-id=\"1511\"] .cell")
+    .first()
+    .boundingBox();
+  const grip = await childSlot.locator(".slot-handle.start").boundingBox();
+  await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(grip.x + grip.width / 2 - cell.width * 1.2, grip.y + grip.height / 2, { steps: 5 });
+  await page.mouse.up();
+  if ((await childSlot.locator("small").textContent()) !== "10:45–11:45")
+    throw Error("Dragging the left handle must snap to 15 minutes");
   if (
     (await ana
       .locator('.work-order-row[data-work-order-id="1511"] .slot')
