@@ -448,11 +448,11 @@ evaluateMove(src, srcSlots, targetTeamId, targetMemberId?, minutes?, newSlots?) 
             conflicts empty ? KEEP (+ pendingOverlaps(target, srcSlots)) : CONFLICT
     durationExceeded      := slotOutcome == KEEP and existing != null
                              and SUM(existing.slots) + SUM(srcSlots) > ceil15(existing.planned + moved)
-    return { version: src.version, planned: src.planned_minutes, scheduled: SUM(srcSlots.minutes),
-             sourceUnscheduled: src.unscheduled,                 // amount dialog: left on the team
-             capacity: { booked: booked(target, src.day), available, gains, fits: not gains or available >= moved },
-             merge: existing ? { timePlanId: existing.id, planned: existing.planned_minutes,
-                                 plannedAfter: existing.planned_minutes + moved } : null,
+    return { source: { version: src.version, planned: src.planned_minutes, scheduled: SUM(srcSlots.minutes),
+                       unscheduled: src.unscheduled },                // amount dialog: left on the team
+             target: { gains, booked: booked(target, src.day), available, fits: not gains or available >= moved,
+                       existingTimePlan: existing ? { timePlanId: existing.id, planned: existing.planned_minutes,
+                                                      plannedAfter: existing.planned_minutes + moved } : null },
              slots: { outcome: slotOutcome, count: srcSlots.count, conflicts, pending, durationExceeded } }
 
 previewMove(planId, targetTeamId, targetMemberId?, minutes?, newSlots?)
@@ -469,8 +469,8 @@ UI usage: team → member asks for the amount (h:mm, default all remaining; all 
 the preview is called once and the dialog computes left on team / member planned after / available after locally.
 Team → team and member → team are full moves in the UI; the partial variants stay in the API only.
 
-Dialog rules taken from the preview: `gains = false` → "capacity does not change" instead of available time;
-`merge` → "added to the existing time plan, X → Y"; `CONFLICT` → each slot with its time and what blocks it
+Dialog rules taken from the preview: `target.gains = false` → "capacity does not change" instead of available time;
+`target.existingTimePlan` → "added to the existing time plan, X → Y"; `CONFLICT` → each slot with its time and what blocks it
 (`blockedFrom`–`blockedTo`, reason, other work order), and "N scheduled times will be removed" (DROP removes all).
 
 ## 5. Move slot (`POST /{id}/slots/{slotId}/move`)

@@ -5,6 +5,7 @@ import {
   clock,
   dayInZone,
   inputDuration,
+  durationMinutes,
   hours,
   unionSlots,
 } from "../src/main/resources/META-INF/resources/time.mjs";
@@ -44,5 +45,7 @@ test("ambiguous and nonexistent local times are rejected", () => {
 test("duration input preserves non-grid minutes", () => {
   assert.equal(inputDuration("1:37"), "PT97M");
   assert.equal(hours(-97), "−1:37");
+  assert.equal(durationMinutes("PT-1H-30M"), -90);
+  assert.equal(hours(durationMinutes("PT-45M")), "−0:45");
   assert.throws(() => inputDuration("1:75"));
 });

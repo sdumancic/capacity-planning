@@ -90,17 +90,19 @@ export default async function memberPlanDragSmoke(page) {
     if (path.endsWith("/preview"))
       return route.fulfill({
         json: {
-          timePlanVersion: 3,
-          plannedDuration: "PT3H",
-          scheduledDuration: "PT1H",
-          sourceUnscheduledDuration: "PT2H",
-          capacity: {
+          source: {
+            version: 3,
+            plannedDuration: "PT3H",
+            scheduledDuration: "PT1H",
+            unscheduledDuration: "PT2H",
+          },
+          target: {
+            gains: body.targetMemberId != null || body.targetTeamId !== 53,
             bookedDuration: "PT3H",
             availableDuration: "PT5H",
-            gains: body.targetMemberId != null || body.targetTeamId !== 53,
             fits,
+            existingTimePlan: null,
           },
-          merge: null,
           slots: {
             outcome: body.targetMemberId == null ? "REMOVED" : outcome,
             count: 1,

@@ -49,8 +49,9 @@ export function toUTC(day, time, zone) {
     );
   return new Date([...candidates][0]).toISOString();
 }
+// java.time.Duration writes negative values per part, e.g. "PT-1H-30M" (over capacity).
 export function durationMinutes(value) {
-  const m = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/.exec(value || "PT0S");
+  const m = /^PT(?:(-?\d+)H)?(?:(-?\d+)M)?(?:(-?\d+)S)?$/.exec(value || "PT0S");
   if (!m) throw Error("Invalid duration returned by server.");
   return Number(m[1] || 0) * 60 + Number(m[2] || 0) + Number(m[3] || 0) / 60;
 }

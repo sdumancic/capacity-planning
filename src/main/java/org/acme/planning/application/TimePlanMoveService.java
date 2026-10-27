@@ -190,7 +190,7 @@ public class TimePlanMoveService {
         return common.result(saved, sync);
     }
 
-    public Map<String, Object> preview(long id, Move m) {
+    public MovePreview preview(long id, Move m) {
         var e = evaluate(id, m, null);
         var p = e.source();
         var c = repo.capacity(e.assignee().teamId(), e.assignee().memberId(), p.day());
@@ -203,33 +203,22 @@ public class TimePlanMoveService {
             fits = fits && repo.capacity(e.assignee().teamId(), e.assignee().memberId(), p.day())
                     .availableMinutes() >= e.moved();
         }
-        var merge = e.target() == null ? null
-                : Map.of("timePlanId", e.target().id(), "plannedDuration",
-                        Duration.ofMinutes(e.target().plannedMinutes()).toString(), "plannedAfterDuration",
-                        Duration.ofMinutes(e.targetAfter().plannedMinutes()).toString());
-        var slots = new LinkedHashMap<String, Object>();
+        var existing = e.target() == null ? null
+                : new MovePreview.ExistingTimePlan(e.target().id(), Duration.ofMinutes(e.target().plannedMinutes()),
+                        Duration.ofMinutes(e.targetAfter().plannedMinutes()));
         int slotCount = m.slots() == null ? p.slots().size() : m.slots().size();
         String outcome = slotCount == 0 ? "NONE"
                 : e.assignee().memberId() == null ? "REMOVED" : e.conflicts().isEmpty() ? "KEEP" : "CONFLICT";
-        slots.put("outcome", outcome);
-        slots.put("count", p.slots().size());
-        slots.put("conflicts", e.conflicts());
-        slots.put("pendingAbsenceWarnings", e.warnings());
         // Only kept slots can exceed the merged plan; CONFLICT is confirmed as DROP (or
         // without the new slots).
-        slots.put("durationExceeded", "KEEP".equals(outcome)
-                && e.targetAfter().scheduled() > Policy.ceil15(e.targetAfter().plannedMinutes()));
-        var out = new LinkedHashMap<String, Object>();
-        out.put("timePlanVersion", p.version());
-        out.put("plannedDuration", Duration.ofMinutes(p.plannedMinutes()).toString());
-        out.put("scheduledDuration", Duration.ofMinutes(p.scheduled()).toString());
-        out.put("sourceUnscheduledDuration",
-                Duration.ofMinutes(Math.max(0, p.plannedMinutes() - p.scheduled())).toString());
-        out.put("capacity",
-                Map.of("bookedDuration", Duration.ofMinutes(c.bookedMinutes()).toString(), "availableDuration",
-                        Duration.ofMinutes(c.availableMinutes()).toString(), "gains", gains, "fits", fits));
-        out.put("merge", merge);
-        out.put("slots", slots);
-        return out;
+        boolean exceeded = "KEEP".equals(outcome)
+                && e.targetAfter().scheduled() > Policy.ceil15(e.targetAfter().plannedMinutes());
+        return new MovePreview(
+                new MovePreview.Source(p.version(), Duration.ofMinutes(p.plannedMinutes()),
+                        Duration.ofMinutes(p.scheduled()),
+                        Duration.ofMinutes(Math.max(0, p.plannedMinutes() - p.scheduled()))),
+                new MovePreview.Target(gains, Duration.ofMinutes(c.bookedMinutes()),
+                        Duration.ofMinutes(c.availableMinutes()), fits, existing),
+                new MovePreview.Slots(outcome, p.slots().size(), e.conflicts(), e.warnings(), exceeded));
     }
 }

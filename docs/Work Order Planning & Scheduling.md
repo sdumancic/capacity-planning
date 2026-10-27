@@ -667,12 +667,11 @@ Moving a time plan changes who does the work. A full move changes the assignee o
 
 ```json
 {
-  "timePlanVersion": 4,
-  "plannedDuration": "PT1H42M",
-  "scheduledDuration": "PT30M",
-  "sourceUnscheduledDuration": "PT1H12M",
-  "capacity": { "bookedDuration": "PT5H57M", "availableDuration": "PT2H", "gains": true, "fits": true },
-  "merge": null,
+  "source": { "version": 4, "plannedDuration": "PT1H42M", "scheduledDuration": "PT30M", "unscheduledDuration": "PT1H12M" },
+  "target": {
+    "gains": true, "bookedDuration": "PT5H57M", "availableDuration": "PT2H", "fits": true,
+    "existingTimePlan": null
+  },
   "slots": {
     "outcome": "CONFLICT",
     "count": 1,
@@ -694,19 +693,22 @@ Moving a time plan changes who does the work. A full move changes the assignee o
 | `KEEP` | member → member, every slot free at the target; or team → member with slots that are all free | slots move with the plan; pending absence warnings shown |
 | `CONFLICT` | member → member, at least one slot not free; or team → member with a slot that is not free (Move planned time only then sends the move without slots) | each slot with its time and what blocks it; "N scheduled times will be removed"; button **Move planned time only** |
 
-Dialog rules: `capacity.gains = false` (member to own team, or the team part of a move inside one team) → "team capacity does not change" instead of available time; `fits = false` → warning and button "Move anyway"; `merge` → "added to the existing time plan, X → Y"; a conflict shows the slot (`start`–`end`) and the blocking part (`blockedFrom`–`blockedTo`, reason, other work order), not only the blocking part.
+`source.version` is sent back as `expectedVersion`; `source.unscheduledDuration` is what can be moved. `target.bookedDuration` is the target's planned time that day on all work orders and `target.availableDuration` its capacity minus booked, both before the move. `target.existingTimePlan` is the target's time plan of this work order that day, or `null`. `target.fits` and `target.existingTimePlan.plannedAfterDuration` are computed for the amount of this request (the whole planned time when no `duration` was sent).
 
-Confirm sends move with `expectedVersion = timePlanVersion`, `slotHandling: DROP` when the outcome was `CONFLICT` (else `KEEP`), and `allowOverbooking: true` when the user accepted "does not fit". The preview is a snapshot: the move validates again under lock, and any `409` (`SLOT_NOT_FREE`, `CAPACITY_EXCEEDED`, `VERSION_CONFLICT`) makes the frontend call the preview again and show the dialog with the new state instead of an error. Preview and move share one evaluation in the backend (`MovePolicy` + `SlotValidator`); the move throws where the preview only reports.
+Dialog rules: `target.gains = false` (member to own team, or the team part of a move inside one team) → "team capacity does not change" instead of available time; `target.fits = false` → warning and button "Move anyway"; `target.existingTimePlan` → "added to the existing time plan, X → Y"; a conflict shows the slot (`start`–`end`) and the blocking part (`blockedFrom`–`blockedTo`, reason, other work order), not only the blocking part.
 
-**Team → member asks for the amount.** The dialog ("Move planned time to employee") has an h:mm field, prefilled with all remaining time, and a button "All remaining". The amount is not rounded; rounding to 15 minutes happens when the time is scheduled. The preview is called once when the dialog opens; the frontend computes the lines while the user types:
+Confirm sends move with `expectedVersion = source.version`, `slotHandling: DROP` when the outcome was `CONFLICT` (else `KEEP`), and `allowOverbooking: true` when the user accepted "does not fit". The preview is a snapshot: the move validates again under lock, and any `409` (`SLOT_NOT_FREE`, `CAPACITY_EXCEEDED`, `VERSION_CONFLICT`) makes the frontend call the preview again and show the dialog with the new state instead of an error. Preview and move share one evaluation in the backend (`MovePolicy` + `SlotValidator`); the move throws where the preview only reports.
+
+**Team → member asks for the amount.** The dialog ("Move planned time to employee") has an h:mm field, prefilled with all remaining time, and a button "All remaining". The amount is not rounded; rounding to 15 minutes happens when the time is scheduled. The preview is called once when the dialog opens, without `duration`; the frontend computes the lines while the user types and never shows `target.fits` or `plannedAfterDuration`, which are for the whole amount:
 
 | Line | Calculation |
 | --- | --- |
-| Planned time left on the team | `sourceUnscheduledDuration` − amount |
-| Member planned time after | `capacity.bookedDuration` + amount |
-| Member available time after | `capacity.availableDuration` − amount; negative → red, button "Move anyway" with `allowOverbooking: true` |
+| Planned time left on the team | `source.unscheduledDuration` − amount |
+| Member planned time after | `target.bookedDuration` + amount |
+| Member available time after | `target.availableDuration` − amount; negative → red, button "Move anyway" with `allowOverbooking: true` |
+| Existing time plan after (only when `target.existingTimePlan` is not null) | `target.existingTimePlan.plannedDuration` + amount |
 
-The amount must be > 0 and ≤ `sourceUnscheduledDuration`, else the button is disabled (the backend answers 400 as well). Amount = all remaining → the move is sent without `duration` (full move: the same time plan gets the member). Less → partial move with `duration`: a new member time plan, or added to `merge` if the member already has the work order that day ("added to the existing X h"). A team chip dropped into a time cell asks for no amount: the drop sizes the slot.
+The amount must be > 0 and ≤ `source.unscheduledDuration`, else the button is disabled (the backend answers 400 as well). Amount = all remaining → the move is sent without `duration` (full move: the same time plan gets the member). Less → partial move with `duration`: a new member time plan, or added to `target.existingTimePlan` if the member already has the work order that day ("added to the existing X h"). A team chip dropped into a time cell asks for no amount: the drop sizes the slot.
 
 Other moves are full in the UI: team → team and member → team move the whole time plan; member → member is full by rule. The API keeps partial moves for team → team and for member → team without slots, but the UI does not call them.
 
@@ -875,11 +877,8 @@ POST v3/work-order-time-plans/P1/move/preview
 
 200
 {
-  "timePlanVersion": 4,
-  "plannedDuration": "PT3H",
-  "scheduledDuration": "PT2H30M",
-  "capacity": { "availableDuration": "PT4H", "gains": true, "fits": true },
-  "merge": null,
+  "source": { "version": 4, "plannedDuration": "PT3H", "scheduledDuration": "PT2H30M", "unscheduledDuration": "PT30M" },
+  "target": { "gains": true, "bookedDuration": "PT4H", "availableDuration": "PT4H", "fits": true, "existingTimePlan": null },
   "slots": {
     "outcome": "CONFLICT",
     "count": 2,

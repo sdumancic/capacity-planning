@@ -81,12 +81,21 @@ export default async function teamDragSmoke(page) {
     if (path.endsWith("/preview"))
       return route.fulfill({
         json: {
-          timePlanVersion: 2,
-          plannedDuration: "PT1H30M",
-          scheduledDuration: "PT0S",
-          sourceUnscheduledDuration: "PT1H30M",
-          capacity: { availableDuration: "PT8H", gains: true, fits: true },
-          merge: null,
+          source: {
+            version: 2,
+            plannedDuration: "PT1H30M",
+            scheduledDuration: "PT0S",
+            unscheduledDuration: "PT1H30M",
+          },
+          // Ana is nearly full; Ivan already has this work order that day.
+          target: body.targetMemberId === 452
+            ? { gains: true, bookedDuration: "PT7H", availableDuration: "PT1H", fits: false, existingTimePlan: null }
+            : body.targetMemberId === 470
+              ? {
+                  gains: true, bookedDuration: "PT2H", availableDuration: "PT6H", fits: true,
+                  existingTimePlan: { timePlanId: 77, plannedDuration: "PT30M", plannedAfterDuration: "PT2H" },
+                }
+              : { gains: true, bookedDuration: "PT0S", availableDuration: "PT8H", fits: true, existingTimePlan: null },
           slots: {
             outcome: body.slots
               ? forceSlotConflict
@@ -118,40 +127,60 @@ export default async function teamDragSmoke(page) {
   const moves = () => calls.filter((c) => c.path.endsWith("/move"));
   const previews = () => calls.filter((c) => c.path.endsWith("/preview"));
 
-  // Drop on a member of the same team; cancelling must never move work.
+  const text = (id) => page.locator(id).textContent();
+  // Drop on a member of the same team: the dialog previews once, and cancelling never moves work.
   await drag(page.locator('[data-member-id="452"]'));
   await page.getByRole("heading", { name: "Assign team work" }).waitFor();
   if ((await page.locator("#assign-duration").inputValue()) !== "1:30")
     throw Error("Amount must default to all remaining time");
-  await page.locator("#modal-submit").click();
-  await page.getByRole("heading", { name: "Confirm move" }).waitFor();
-  if (moves().length) throw Error("Drop saved before confirmation");
+  if (previews().at(-1).body.duration)
+    throw Error("The amount dialog previews the whole remaining time");
+  // Lines come from the typed amount: 1:30 does not fit Ana's 1:00.
+  if ((await text("#assign-left")) !== "0:00" || (await text("#assign-planned")) !== "8:30" ||
+      (await text("#assign-available")) !== "−0:30")
+    throw Error("Amount lines must be computed from the full amount");
+  if (!(await page.locator("#assign-available").evaluate((n) => n.classList.contains("error"))))
+    throw Error("Negative available time must be red");
+  if ((await page.locator("#modal-submit").textContent()) !== "Move anyway")
+    throw Error("Overbooking must say Move anyway");
+  if (await page.locator("#assign-existing").count())
+    throw Error("No existing-plan line when the member has no plan of the order");
   await page.locator("#cancel-modal").click();
   if (moves().length) throw Error("Cancel moved work");
 
   await drag(page.locator('[data-member-id="452"]'));
-  await page.locator("#modal-submit").click();
-  await page.getByRole("heading", { name: "Confirm move" }).waitFor();
+  await page.getByRole("heading", { name: "Assign team work" }).waitFor();
   await page.locator("#modal-submit").click();
   await page.locator("#modal").waitFor({ state: "hidden" });
   if (
     moves()[0]?.body.targetTeamId !== 53 ||
     moves()[0]?.body.targetMemberId !== 452 ||
-    moves()[0]?.body.duration
+    moves()[0]?.body.expectedVersion !== 2 ||
+    moves()[0]?.body.duration ||
+    moves()[0]?.body.allowOverbooking !== true
   )
     throw Error("Same-team full assignment payload incorrect");
 
-  // Another team's employee can receive just part of the team workload.
+  // Another team's employee can receive just part of the team workload; the lines follow the typing.
   await drag(page.locator('[data-member-id="470"]'));
+  await page.getByRole("heading", { name: "Assign team work" }).waitFor();
   await page.locator("#assign-duration").fill("0:30");
-  await page.locator("#modal-submit").click();
-  await page.getByRole("heading", { name: "Confirm move" }).waitFor();
+  if ((await text("#assign-left")) !== "1:00" || (await text("#assign-planned")) !== "2:30" ||
+      (await text("#assign-available")) !== "5:30" || (await text("#assign-existing")) !== "1:00")
+    throw Error("Partial amount lines incorrect");
+  if ((await page.locator("#modal-submit").textContent()) !== "Assign")
+    throw Error("A fitting amount must say Assign");
+  await page.locator("#assign-duration").fill("2:00");
+  if (!(await page.locator("#modal-submit").isDisabled()))
+    throw Error("More than the remaining time must disable the button");
+  await page.locator("#assign-duration").fill("0:30");
   await page.locator("#modal-submit").click();
   await page.locator("#modal").waitFor({ state: "hidden" });
   if (
     moves()[1]?.body.targetTeamId !== 61 ||
     moves()[1]?.body.targetMemberId !== 470 ||
-    moves()[1]?.body.duration !== "PT30M"
+    moves()[1]?.body.duration !== "PT30M" ||
+    moves()[1]?.body.allowOverbooking
   )
     throw Error("Cross-team partial assignment payload incorrect");
 

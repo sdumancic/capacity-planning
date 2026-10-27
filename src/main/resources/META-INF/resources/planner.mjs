@@ -15,6 +15,25 @@ let state,
 const drafts = new Map();
 const shownHubRejections = new Set();
 const base = "/v3/work-order-time-plans";
+/**
+ * Response of POST {base}/{id}/move/preview. Durations are ISO 8601 strings ("PT1H30M") and can be
+ * negative ("PT-1H-30M"). Values marked "for this request" use the requested amount, or the whole
+ * planned time when the request sent no duration.
+ * @typedef {object} MovePreview
+ * @property {object} source the time plan being moved
+ * @property {number} source.version sent back by the move request as expectedVersion
+ * @property {string} source.plannedDuration
+ * @property {string} source.scheduledDuration
+ * @property {string} source.unscheduledDuration what can be moved: max and default of the amount field
+ * @property {object} target the team or member that receives the minutes
+ * @property {boolean} target.gains false when the target gains no minutes (member to own team); then no capacity check
+ * @property {string} target.bookedDuration the target's planned time that day on all work orders, before the move
+ * @property {string} target.availableDuration target capacity minus booked, before the move
+ * @property {boolean} target.fits whether the amount of this request fits the target's capacity
+ * @property {?{timePlanId: number, plannedDuration: string, plannedAfterDuration: string}} target.existingTimePlan
+ *   the target's time plan of this work order that day, null when it has none; plannedAfterDuration is for this request
+ * @property {{outcome: string, count: number, conflicts: object[], pendingAbsenceWarnings: object[], durationExceeded: boolean}} slots
+ */
 function el(tag, attrs = {}, ...children) {
   const n = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
@@ -1216,12 +1235,13 @@ function movePlan(p, preset) {
     "Preview move",
   );
 }
+/** @param {MovePreview} preview */
 function confirmMove(p, body, preview) {
   const conflict = preview.slots?.outcome === "CONFLICT";
   const detail = el(
     "div",
     { class: "detail" },
-    `Scheduled time: ${preview.slots?.outcome || "NONE"}\n${preview.merge ? "Minutes will merge into an existing time plan.\n" : ""}${preview.capacity?.gains === false ? "Team capacity does not change." : `Target available: ${preview.capacity?.availableDuration || "See details below"}`}`,
+    `Scheduled time: ${preview.slots?.outcome || "NONE"}\n${preview.target.existingTimePlan ? "Minutes will merge into an existing time plan.\n" : ""}${preview.target.gains === false ? "Team capacity does not change." : `Target available: ${preview.target.availableDuration}`}`,
   );
   const elements = [detail];
   if (conflict)
@@ -1242,7 +1262,7 @@ function confirmMove(p, body, preview) {
       el("pre", {}, JSON.stringify(preview, null, 2)),
     ),
   );
-  if (preview.capacity?.fits === false)
+  if (preview.target.fits === false)
     elements.push(
       el(
         "label",
@@ -1255,16 +1275,16 @@ function confirmMove(p, body, preview) {
     "Confirm move",
     elements,
     async () => {
-      if (preview.capacity?.fits === false && !$("allow-overbooking").checked)
+      if (preview.target.fits === false && !$("allow-overbooking").checked)
         throw Error("Confirm overbooking to continue.");
       const request = {
         ...body,
-        expectedVersion: preview.timePlanVersion ?? p.version,
+        expectedVersion: preview.source.version,
         slotHandling:
           conflict && p.memberId != null && body.targetMemberId != null
             ? "DROP"
             : "KEEP",
-        allowOverbooking: preview.capacity?.fits === false,
+        allowOverbooking: preview.target.fits === false,
       };
       // A team chip has no source slots to drop: omit its proposed slots instead.
       if (conflict && p.memberId == null) delete request.slots;
@@ -1288,7 +1308,18 @@ function confirmMove(p, body, preview) {
     conflict ? "Move planned time only" : "Confirm move",
   );
 }
-function assignTeamWork(p, team, member) {
+// The preview is read once, for the whole amount; every line here is computed from the typed amount,
+// so the response's fits and plannedAfterDuration (both for the whole amount) are never shown.
+async function assignTeamWork(p, team, member, amountText) {
+  const body = { expectedVersion: p.version, targetTeamId: team.id, targetMemberId: member.id };
+  /** @type {MovePreview} */
+  const preview = await api(`${base}/${p.timePlanId}/move/preview`, "POST", body);
+  const remaining = durationMinutes(preview.source.unscheduledDuration);
+  const booked = durationMinutes(preview.target.bookedDuration);
+  const available = durationMinutes(preview.target.availableDuration);
+  const existing = preview.target.existingTimePlan;
+  const line = (label, id) =>
+    el("p", { class: "assign-line" }, el("span", {}, label), el("strong", { id }, "—"));
   showModal(
     "Assign team work",
     [
@@ -1300,60 +1331,83 @@ function assignTeamWork(p, team, member) {
         el("strong", {}, member.name),
         el("small", {}, team.name),
       ),
-      el(
-        "p",
-        { class: "detail" },
-        `${title(p)}\n${hours(durationMinutes(p.plannedDuration))} h remaining on team`,
-      ),
-      field(
-        "Time to assign (h:mm)",
-        "assign-duration",
-        "text",
-        hours(durationMinutes(p.plannedDuration)),
-        { required: true },
-      ),
+      el("p", { class: "detail" }, `${title(p)}\n${hours(remaining)} h remaining on team`),
+      field("Time to assign (h:mm)", "assign-duration", "text", amountText || hours(remaining), {
+        required: true,
+      }),
       el(
         "button",
         {
           type: "button",
           class: "all-remaining",
           onclick: () => {
-            $("assign-duration").value = hours(
-              durationMinutes(p.plannedDuration),
-            );
+            $("assign-duration").value = hours(remaining);
+            update();
           },
         },
         "All remaining",
       ),
+      line("Planned time left on the team", "assign-left"),
+      line("Member planned time after", "assign-planned"),
+      preview.target.gains === false
+        ? el("p", { class: "muted" }, "Team capacity does not change.")
+        : line("Member available time after", "assign-available"),
+      existing ? line("Existing time plan after", "assign-existing") : null,
       el(
         "p",
         { class: "muted" },
         "Assigned work stays unscheduled. Drop on a time cell to assign and schedule together.",
       ),
-    ],
+    ].filter(Boolean),
     async () => {
-      const duration = inputDuration($("assign-duration").value);
-      const amount = durationMinutes(duration);
-      if (amount <= 0 || amount > durationMinutes(p.plannedDuration))
+      const amount = typed();
+      if (amount == null)
         throw Error(
           "Choose an amount greater than zero and no more than the team’s remaining time.",
         );
-      const body = {
-        expectedVersion: p.version,
-        targetTeamId: team.id,
-        targetMemberId: member.id,
-      };
-      if (amount < durationMinutes(p.plannedDuration)) body.duration = duration;
-      const preview = await api(
-        `${base}/${p.timePlanId}/move/preview`,
-        "POST",
-        body,
-      );
-      close();
-      confirmMove(p, body, preview);
+      const request = { ...body, expectedVersion: preview.source.version };
+      // All remaining is a full move: the same time plan gets the member.
+      if (amount < remaining) request.duration = `PT${amount}M`;
+      if (preview.target.gains !== false && available - amount < 0) request.allowOverbooking = true;
+      try {
+        await overbookWrite(`${base}/${p.timePlanId}/move`, request);
+      } catch (e) {
+        if (e.status !== 409 || e.data?.code === "CAPACITY_EXCEEDED") throw e;
+        // The plan or the member changed since the preview: show the dialog again with the new state.
+        const amountText = $("assign-duration").value;
+        close();
+        await assignTeamWork(p, team, member, amountText);
+        message("The plan changed. Review the updated amounts.", true);
+      }
     },
-    "Preview assignment",
+    "Assign",
   );
+  function typed() {
+    try {
+      const amount = durationMinutes(inputDuration($("assign-duration").value));
+      return amount > 0 && amount <= remaining ? amount : null;
+    } catch {
+      return null;
+    }
+  }
+  function update() {
+    const amount = typed();
+    const show = (id, minutes) => {
+      const n = $(id);
+      if (!n) return;
+      n.textContent = amount == null ? "—" : hours(minutes);
+      n.classList.toggle("error", amount != null && minutes < 0);
+    };
+    show("assign-left", remaining - amount);
+    show("assign-planned", booked + amount);
+    show("assign-available", available - amount);
+    if (existing) show("assign-existing", durationMinutes(existing.plannedDuration) + amount);
+    $("modal-submit").disabled = amount == null;
+    $("modal-submit").textContent =
+      amount != null && preview.target.gains !== false && available - amount < 0 ? "Move anyway" : "Assign";
+  }
+  $("assign-duration").addEventListener("input", update);
+  update();
 }
 async function previewPlanTransfer(p, teamId, memberId) {
   const body = { expectedVersion: p.version, targetTeamId: teamId };
@@ -1380,7 +1434,7 @@ async function dropMember(event, t, m, time) {
         await previewPlanTransfer(p, t.id, m.id);
       } else if (time) {
         await dropChip(p, t, m, time);
-      } else assignTeamWork(p, t, m);
+      } else await assignTeamWork(p, t, m);
       return;
     }
     if (!time) throw Error("Drop the slot on a time cell.");

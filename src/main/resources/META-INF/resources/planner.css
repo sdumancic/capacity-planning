@@ -1051,3 +1051,11 @@ body[data-drag-kind] .member-info > * {
   background: rgba(60, 120, 50, 0.35);
   outline: none;
 }
+
+.assign-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 4px 0;
+  font-size: 13px;
+}

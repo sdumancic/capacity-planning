@@ -102,7 +102,7 @@ public class PlanningResource {
 
     @POST 
     @Path("/work-order-time-plans/{id}/move/preview") 
-    public Object preview(@PathParam("id") long id, Move m) {
+    public MovePreview preview(@PathParam("id") long id, Move m) {
         return moves.preview(id, m);
     }
 

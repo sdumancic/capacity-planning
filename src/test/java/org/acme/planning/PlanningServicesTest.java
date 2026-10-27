@@ -6,6 +6,10 @@ import org.acme.planning.domain.*;
 import org.acme.planning.domain.Models.*;
 import java.time.*;
 import java.util.*;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import static org.junit.jupiter.api.Assertions.*;
 
 class PlanningServicesTest {
@@ -220,7 +224,7 @@ class PlanningServicesTest {
         r.plans.put(1L, plan(1, 1505, 452, 50, slot(21, 9)));
         r.plans.put(2L, plan(2, 1505, 460, 50, slot(31, 10)));
         var result = moves(r).preview(1, new Move(null, 53, 460, null, null, null, false, null, null));
-        assertEquals(true, ((Map<?, ?>)result.get("slots")).get("durationExceeded"));
+        assertTrue(result.slots().durationExceeded());
         assertEquals(0, r.saves);
         assertThrows(Problem.class, () -> moves(r).move(1, new Move(0, 53, 460, null, null, null, false, null, null), null));
     }
@@ -241,7 +245,7 @@ class PlanningServicesTest {
         r.teamAvailable = 0;
         r.plans.put(1L, plan(1,1505,452,60));
         var result = moves(r).preview(1,new Move(null,61,470,null,null,null,false,null,null));
-        assertEquals(false,((Map<?,?>)result.get("capacity")).get("fits"));
+        assertFalse(result.target().fits());
     }
 
     @Test
@@ -452,11 +456,54 @@ class PlanningServicesTest {
         r.plans.put(1L, plan(1, 1505, 452, 50, slot(21, 9)));
         r.plans.put(2L, plan(2, 1505, 460, 50, slot(31, 9)));
         var result = moves(r).preview(1, new Move(null, 53, 460, null, null, null, false, null, null));
-        var slots = (Map<?, ?>) result.get("slots");
-        assertEquals("CONFLICT", slots.get("outcome"));
-        assertEquals(false, slots.get("durationExceeded"));
-        assertEquals(1, slots.get("count"));
-        assertEquals("PT1H40M", ((Map<?, ?>) result.get("merge")).get("plannedAfterDuration"));
+        assertEquals("CONFLICT", result.slots().outcome());
+        assertFalse(result.slots().durationExceeded());
+        assertEquals(1, result.slots().count());
+        assertEquals(Duration.ofMinutes(100), result.target().existingTimePlan().plannedAfterDuration());
+    }
+
+    static final ObjectMapper JSON = new ObjectMapper().registerModule(new JavaTimeModule())
+            .disable(SerializationFeature.WRITE_DURATIONS_AS_TIMESTAMPS);
+
+    @Test void previewNamesTheTargetsExistingTimePlan() throws Exception {
+        var r = new Memory();
+        r.available = 135;
+        r.plans.put(1L, new Plan(1, 1505, 53, null, DAY, 120, 2, List.of()));
+        r.plans.put(8L, plan(8, 1505, 460, 90));
+        var result = moves(r).preview(1, new Move(null, 53, 460, null, null, null, false, null, null));
+        var json = JSON.readTree(JSON.writeValueAsString(result));
+        assertEquals(2, json.at("/source/version").asInt());
+        assertEquals("PT2H", json.at("/source/plannedDuration").asText());
+        assertEquals("PT0S", json.at("/source/scheduledDuration").asText());
+        assertEquals("PT2H", json.at("/source/unscheduledDuration").asText());
+        assertTrue(json.at("/target/gains").asBoolean());
+        assertEquals("PT5H45M", json.at("/target/bookedDuration").asText());
+        assertEquals("PT2H15M", json.at("/target/availableDuration").asText());
+        assertTrue(json.at("/target/fits").asBoolean());
+        assertEquals(8, json.at("/target/existingTimePlan/timePlanId").asLong());
+        assertEquals("PT1H30M", json.at("/target/existingTimePlan/plannedDuration").asText());
+        assertEquals("PT3H30M", json.at("/target/existingTimePlan/plannedAfterDuration").asText());
+        assertEquals("NONE", json.at("/slots/outcome").asText());
+        assertEquals(Set.of("source", "target", "slots"), fieldNames(json));
+    }
+
+    @Test void previewHasNoExistingTimePlanWhenTheTargetHasNone() throws Exception {
+        var r = new Memory();
+        r.plans.put(1L, new Plan(1, 1505, 53, null, DAY, 120, 0, List.of()));
+        var result = moves(r).preview(1, new Move(null, 53, 460, "PT30M", null, null, false, null, null));
+        assertNull(result.target().existingTimePlan());
+        var json = JSON.readTree(JSON.writeValueAsString(result));
+        // The field is present and null, not omitted.
+        assertTrue(json.at("/target").has("existingTimePlan"));
+        assertTrue(json.at("/target/existingTimePlan").isNull());
+        assertEquals(Set.of("gains", "bookedDuration", "availableDuration", "fits", "existingTimePlan"),
+                fieldNames(json.at("/target")));
+    }
+
+    static Set<String> fieldNames(JsonNode node) {
+        var names = new HashSet<String>();
+        node.fieldNames().forEachRemaining(names::add);
+        return names;
     }
 
     @Test void blockingChangeReportsConflictsWithoutChangingSlots() {
