@@ -18,6 +18,21 @@ public class TimeSlotService {
 
     List<Map<String, Object>> conflicts(Plan p, Set<Long> excluded, List<Plan> finalPlans,
             List<Map<String, Object>> warnings) {
+        return conflicts(p, excluded, finalPlans, warnings, new HashMap<>());
+    }
+
+    /** Every plan of one request against the others' final state, with one assignee lookup per member. */
+    List<Map<String, Object>> conflicts(List<Plan> plans, Set<Long> excluded, List<Map<String, Object>> warnings) {
+        var assignees = new HashMap<Integer, Assignee>();
+        var out = new ArrayList<Map<String, Object>>();
+        for (var p : plans) {
+            out.addAll(conflicts(p, excluded, plans, warnings, assignees));
+        }
+        return out;
+    }
+
+    private List<Map<String, Object>> conflicts(Plan p, Set<Long> excluded, List<Plan> finalPlans,
+            List<Map<String, Object>> warnings, Map<Integer, Assignee> assignees) {
         var out = new ArrayList<Map<String, Object>>();
         if (p.memberId() == null) {
             if (!p.slots().isEmpty()) {
@@ -25,7 +40,7 @@ public class TimeSlotService {
             }
             return out;
         }
-        var a = repo.assignee(p.teamId(), p.memberId());
+        var a = assignee(p, assignees);
         if (!a.enabled()) {
             for (var slot : p.slots()) {
                 out.add(conflict(slot, slot.start(), slot.end(), "DISABLED_ASSIGNEE", null));
@@ -37,13 +52,14 @@ public class TimeSlotService {
         blocks.addAll(repo.booked(a.userId(), p.day(), excluded));
         for (var q : finalPlans) {
             if (q.id() != p.id() && q.memberId() != null
-                    && repo.assignee(q.teamId(), q.memberId()).userId().equals(a.userId())) {
+                    && assignee(q, assignees).userId().equals(a.userId())) {
                 for (var s : q.slots()) {
                     blocks.add(new Interval(s.id(), s.start(), s.end(), "BOOKED", q.workOrderId()));
                 }
             }
         }
         var order = repo.order(p.workOrderId());
+        var pending = repo.blocks(a.userId(), p.day(), true);
         var ids = new HashSet<Long>();
         for (int i = 0; i < p.slots().size(); i++) {
             var s = p.slots().get(i);
@@ -72,7 +88,7 @@ public class TimeSlotService {
                     out.add(conflict(s, b.start(), b.end(), "BOOKED", p.workOrderId()));
                 }
             }
-            for (var b : repo.blocks(a.userId(), p.day(), true)) {
+            for (var b : pending) {
                 if (Policy.overlap(s.start(), s.end(), b.start(), b.end())) {
                     var w = new LinkedHashMap<String, Object>();
                     w.put("code", "SLOT_OVERLAPS_PENDING_ABSENCE");
@@ -85,6 +101,10 @@ public class TimeSlotService {
             }
         }
         return out;
+    }
+
+    private Assignee assignee(Plan p, Map<Integer, Assignee> assignees) {
+        return assignees.computeIfAbsent(p.memberId(), m -> repo.assignee(p.teamId(), m));
     }
 
     private Map<String, Object> conflict(Slot s, Instant from, Instant to, String reason, Integer order) {

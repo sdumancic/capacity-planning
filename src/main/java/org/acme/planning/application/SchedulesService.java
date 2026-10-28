@@ -69,11 +69,10 @@ public class SchedulesService {
         }
         slots.validateRequestOverlaps(after);
         var warnings = new ArrayList<Map<String, Object>>(); // the response recomputes them from the saved state
-        var conflicts = new ArrayList<Map<String, Object>>();
         for (var p : after) {
             common.limit(p);
-            conflicts.addAll(slots.conflicts(p, excluded, after, warnings));
         }
+        var conflicts = slots.conflicts(after, excluded, warnings);
         if (conflicts.stream().anyMatch(c -> "OUTSIDE_VEHICLE_WINDOW".equals(c.get("reason")))) {
             throw new Problem(409, "OUTSIDE_VEHICLE_WINDOW", "Slot outside vehicle window",
                     Map.of("conflicts", conflicts));
