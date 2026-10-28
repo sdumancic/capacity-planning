@@ -114,25 +114,23 @@ public class TimeSlotService {
     }
 
     void validateRequestOverlaps(List<Plan> plans) {
-        for (int i = 0; i < plans.size(); i++) {
-            var p = plans.get(i);
-            var user = repo.assignee(p.teamId(), p.memberId()).userId();
-            for (int si = 0; si < p.slots().size(); si++) {
-                var slot = p.slots().get(si);
-                Policy.grid(slot.start(), slot.end(), p.day(), common.zone());
-                for (int j = 0; j <= i; j++) {
-                    var q = plans.get(j);
-                    if (!repo.assignee(q.teamId(), q.memberId()).userId().equals(user)) {
-                        continue;
-                    }
-                    int end = j == i ? si : q.slots().size();
-                    for (int k = 0; k < end; k++) {
-                        var other = q.slots().get(k);
-                        Policy.grid(other.start(), other.end(), q.day(), common.zone());
-                        if (Policy.overlap(slot.start(), slot.end(), other.start(), other.end())) {
-                            throw new Problem(400, "SLOT_OVERLAP", "Request slots of the same person overlap");
-                        }
-                    }
+        // A person can be a member of several teams, so slots are grouped by user, not by member.
+        // One assignee lookup per member, however many plans and slots it has.
+        var userOfMember = new HashMap<Integer, Integer>();
+        var slotsByUser = new HashMap<Integer, List<Slot>>();
+        for (var p : plans) {
+            int user = userOfMember.computeIfAbsent(p.memberId(), m -> repo.assignee(p.teamId(), m).userId());
+            for (var s : p.slots()) {
+                Policy.grid(s.start(), s.end(), p.day(), common.zone());
+                slotsByUser.computeIfAbsent(user, u -> new ArrayList<>()).add(s);
+            }
+        }
+        // Sorted by start, two slots of a person overlap only if some neighbouring pair does.
+        for (var slots : slotsByUser.values()) {
+            slots.sort(Comparator.comparing(Slot::start));
+            for (int i = 1; i < slots.size(); i++) {
+                if (slots.get(i).start().isBefore(slots.get(i - 1).end())) {
+                    throw new Problem(400, "SLOT_OVERLAP", "Request slots of the same person overlap");
                 }
             }
         }

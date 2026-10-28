@@ -342,6 +342,21 @@ class PlanningServicesTest {
         assertEquals(400,e.status); assertEquals("SLOT_OVERLAP",e.code); assertEquals(0,r.saves);
     }
 
+    @Test void requestOverlapIgnoresTouchingSlotsAndOtherPeopleButFindsUnorderedOverlap() {
+        var r = new Memory();
+        r.plans.put(1L, plan(1, 1505, 452, 180)); r.plans.put(2L, plan(2, 1506, 460, 60)); r.plans.put(3L, plan(3, 1511, 452, 60));
+        // Touching slots of one person and the same time for another person are fine.
+        schedules(r).schedule(List.of(
+                new Schedule(1L, 0, List.of(new Slot(null, at(9), at(10)), new Slot(null, at(10), at(11)))),
+                new Schedule(2L, 0, List.of(new Slot(null, at(9), at(10))))));
+        // 09:00-11:00 and 10:00-11:00 overlap although the request lists 13:00 between them.
+        r.plans.put(1L, plan(1, 1505, 452, 180)); r.plans.put(3L, plan(3, 1511, 452, 60));
+        var e = assertThrows(Problem.class, () -> schedules(r).schedule(List.of(
+                new Schedule(1L, 0, List.of(new Slot(null, at(9), at(11)), new Slot(null, at(13), at(14)))),
+                new Schedule(3L, 0, List.of(new Slot(null, at(10), at(11)))))));
+        assertEquals("SLOT_OVERLAP", e.code);
+    }
+
     @Test void pendingWarningIsOnlyIntersectionWithSlot() {
         var r = new Memory(); r.plans.put(1L,plan(1,1505,452,60));
         r.pending.add(new Interval(50L,at(8),at(11),"PENDING_ABSENCE",null));
